@@ -1,0 +1,34 @@
+{
+    "carolbassi.com.br": {
+        "wait_idle": true,
+        "escalation_level": 3
+    },
+    "shopee.com.br": {
+        "escalation_level": 2,
+        "wait_idle": true
+    },
+    "amazon.com.br": {
+        "escalation_level": 2,
+        "wait_idle": true
+    },
+    "elegancecamisas.com.br": {
+        "escalation_level": 2,
+        "wait_idle": true
+    },
+    "temu.com": {
+        "escalation_level": 4,
+        "wait_idle": true
+    },
+    "agilitafashion.com.br": {
+        "escalation_level": 2,
+        "wait_idle": true
+    },
+    "lennyniemeyer.com.br": {
+        "escalation_level": 2,
+        "wait_idle": true
+    },
+    "dafiti.com.br": {
+        "escalation_level": 2,
+        "wait_idle": true
+    }
+}

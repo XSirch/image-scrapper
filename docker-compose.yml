@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  fashion-bot-api:
+    build: .
+    container_name: fashion-bot-api
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      # O app vai ler essa string do seu terminal/sistema (.env) pra conectar na sua VPS
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=${DATABASE_URL}

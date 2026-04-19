@@ -1,0 +1,9 @@
+scrapling[fetchers]
+requests
+pillow
+customtkinter
+lxml
+fastapi
+uvicorn
+pydantic
+psycopg2-binary
