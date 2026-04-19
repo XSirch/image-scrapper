@@ -33,8 +33,8 @@ RUN pip install uv && uv pip install --system --no-cache -r requirements.txt
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
-# Trigger Camoufox initial fetch to guarantee the camouflage binary engines are set up
-RUN python -c "from scrapling.fetchers import StealthyFetcher; StealthyFetcher.fetch('about:blank', headless=True)" || true
+# Download Camoufox stealth browser binary (without launching)
+RUN python -c "import camoufox; camoufox.sync_api.CamoufoxSync()" || python -m camoufox fetch || true
 
 # Copy project files
 COPY . .
