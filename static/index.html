@@ -3,461 +3,373 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fashion Bot — Dashboard</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <title>scrapper — dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
         :root {
-            --bg: #0b0e14;
-            --surface: #131720;
-            --surface-2: #1a1f2e;
-            --border: #252b3b;
-            --text: #e2e8f0;
-            --text-muted: #8892a4;
-            --accent: #6c5ce7;
-            --accent-glow: rgba(108, 92, 231, 0.25);
-            --success: #00cec9;
-            --danger: #ff6b6b;
-            --warning: #fdcb6e;
-            --radius: 14px;
+            --bg: #111;
+            --surface: #191919;
+            --border: #2a2a2a;
+            --text: #ccc;
+            --text-dim: #666;
+            --text-bright: #eee;
+            --green: #3ddc84;
+            --red: #e55;
+            --yellow: #e5c07b;
+            --blue: #61afef;
         }
 
         body {
-            font-family: 'Inter', sans-serif;
+            font-family: 'Inter', -apple-system, sans-serif;
             background: var(--bg);
             color: var(--text);
-            min-height: 100vh;
-            overflow-x: hidden;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
         }
 
-        /* Ambient glow */
-        body::before {
-            content: '';
-            position: fixed;
-            top: -200px; left: 50%;
-            transform: translateX(-50%);
-            width: 800px; height: 800px;
-            background: radial-gradient(circle, rgba(108,92,231,0.08) 0%, transparent 70%);
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        .container {
-            max-width: 1100px;
+        /* ── Layout ── */
+        .shell {
+            max-width: 960px;
             margin: 0 auto;
-            padding: 40px 24px;
-            position: relative;
-            z-index: 1;
+            padding: 48px 20px 80px;
         }
 
         /* ── Header ── */
-        header {
-            text-align: center;
-            margin-bottom: 48px;
-        }
-        header h1 {
-            font-size: 2rem;
-            font-weight: 800;
-            background: linear-gradient(135deg, #6c5ce7, #a29bfe, #00cec9);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            letter-spacing: -0.5px;
-        }
-        header p {
-            color: var(--text-muted);
-            font-size: 0.95rem;
-            margin-top: 6px;
-        }
-
-        /* ── Card ── */
-        .card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 28px;
-            margin-bottom: 28px;
-            transition: border-color 0.3s;
-        }
-        .card:hover { border-color: rgba(108,92,231,0.35); }
-        .card-title {
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1.2px;
-            color: var(--text-muted);
-            margin-bottom: 18px;
-        }
-
-        /* ── Form ── */
-        .search-row {
+        .topbar {
             display: flex;
+            align-items: baseline;
             gap: 12px;
-            align-items: stretch;
+            margin-bottom: 40px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 20px;
         }
-        .search-row input[type="text"] {
-            flex: 1;
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px 18px;
-            color: var(--text);
-            font-size: 0.95rem;
-            font-family: 'Inter', sans-serif;
-            outline: none;
-            transition: border-color 0.25s, box-shadow 0.25s;
+        .topbar h1 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--text-bright);
+            letter-spacing: -0.3px;
         }
-        .search-row input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-glow);
+        .topbar span {
+            font-size: 0.75rem;
+            color: var(--text-dim);
         }
-        .level-select {
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px 16px;
-            color: var(--text);
-            font-family: 'Inter', sans-serif;
-            font-size: 0.9rem;
-            cursor: pointer;
-            outline: none;
-            min-width: 115px;
-            transition: border-color 0.25s;
-        }
-        .level-select:focus { border-color: var(--accent); }
 
-        .btn-extract {
-            background: linear-gradient(135deg, #6c5ce7, #a29bfe);
-            color: #fff;
+        /* ── Section ── */
+        section { margin-bottom: 36px; }
+        .section-label {
+            font-size: 0.7rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+        }
+
+        /* ── Input Row ── */
+        .input-row {
+            display: flex;
+            gap: 1px;
+            background: var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .input-row input {
+            flex: 1;
+            background: var(--surface);
             border: none;
-            border-radius: 10px;
-            padding: 14px 28px;
+            padding: 12px 14px;
+            color: var(--text-bright);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem;
+            outline: none;
+        }
+        .input-row input::placeholder { color: var(--text-dim); }
+        .input-row select {
+            background: var(--surface);
+            border: none;
+            padding: 12px 14px;
+            color: var(--text);
             font-family: 'Inter', sans-serif;
-            font-weight: 600;
-            font-size: 0.95rem;
+            font-size: 0.8rem;
             cursor: pointer;
-            transition: transform 0.15s, box-shadow 0.25s;
-            white-space: nowrap;
+            outline: none;
+            -webkit-appearance: none;
         }
-        .btn-extract:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 6px 24px var(--accent-glow);
+        .input-row button {
+            background: var(--surface);
+            border: none;
+            padding: 12px 20px;
+            color: var(--text-bright);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s;
         }
-        .btn-extract:active { transform: scale(0.97); }
-        .btn-extract:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
+        .input-row button:hover { background: #222; }
+        .input-row button:disabled { color: var(--text-dim); cursor: default; }
 
         /* ── Status ── */
-        .status-bar {
-            margin-top: 16px;
-            min-height: 22px;
-            font-size: 0.85rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
+        .status {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            margin-top: 10px;
+            min-height: 20px;
+            color: var(--text-dim);
         }
-        .status-bar .dot {
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            display: inline-block;
-        }
-        .dot-idle { background: var(--text-muted); }
-        .dot-loading { background: var(--warning); animation: pulse 1s infinite; }
-        .dot-success { background: var(--success); }
-        .dot-error { background: var(--danger); }
+        .status[data-state="loading"] { color: var(--yellow); }
+        .status[data-state="done"] { color: var(--green); }
+        .status[data-state="error"] { color: var(--red); }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-
-        /* ── Grid de Imagens ── */
-        .results-grid {
+        /* ── Image Results ── */
+        .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 2px;
         }
-        .img-card {
-            position: relative;
-            border-radius: 12px;
-            overflow: hidden;
-            background: var(--surface-2);
-            border: 1px solid var(--border);
+        .grid-item {
             aspect-ratio: 1;
-            cursor: pointer;
-            transition: transform 0.2s, border-color 0.25s;
+            overflow: hidden;
+            position: relative;
+            background: var(--surface);
         }
-        .img-card:hover {
-            transform: translateY(-4px);
-            border-color: var(--accent);
-        }
-        .img-card img {
+        .grid-item img {
             width: 100%;
             height: 100%;
             object-fit: cover;
             display: block;
+            filter: grayscale(15%);
+            transition: filter 0.2s;
         }
-        .img-overlay {
+        .grid-item:hover img { filter: none; }
+        .grid-item a {
             position: absolute;
-            bottom: 0; left: 0; right: 0;
-            background: linear-gradient(transparent, rgba(0,0,0,0.85));
-            padding: 28px 12px 12px;
-            opacity: 0;
-            transition: opacity 0.25s;
+            inset: 0;
             display: flex;
-            justify-content: flex-end;
-        }
-        .img-card:hover .img-overlay { opacity: 1; }
-        .img-overlay a {
-            background: rgba(255,255,255,0.15);
-            backdrop-filter: blur(8px);
-            color: #fff;
+            align-items: flex-end;
+            padding: 8px;
+            background: linear-gradient(transparent 60%, rgba(0,0,0,0.7));
+            opacity: 0;
+            transition: opacity 0.2s;
             text-decoration: none;
+        }
+        .grid-item:hover a { opacity: 1; }
+        .grid-item a span {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: #fff;
+            background: rgba(255,255,255,0.12);
+            padding: 3px 8px;
+            border-radius: 3px;
+        }
+
+        .result-count {
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.75rem;
-            padding: 6px 12px;
-            border-radius: 6px;
-            transition: background 0.2s;
+            color: var(--text-dim);
+            margin-bottom: 8px;
         }
-        .img-overlay a:hover { background: rgba(255,255,255,0.3); }
 
-        /* ── Placeholder Vazio ── */
-        .empty-state {
+        .empty {
+            padding: 48px 0;
             text-align: center;
-            padding: 60px 20px;
-            color: var(--text-muted);
-        }
-        .empty-state .icon {
-            font-size: 3rem;
-            margin-bottom: 12px;
-            opacity: 0.3;
+            font-size: 0.8rem;
+            color: var(--text-dim);
         }
 
-        /* ── Profiles Table ── */
-        .profiles-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-            gap: 12px;
+        /* ── Profiles ── */
+        .profiles-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            background: var(--border);
+            border-radius: 6px;
+            overflow: hidden;
         }
-        .profile-chip {
+        .profile-row {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px 16px;
-            transition: border-color 0.2s;
+            background: var(--surface);
+            padding: 10px 14px;
         }
-        .profile-chip:hover { border-color: var(--accent); }
-        .profile-chip .domain {
-            font-weight: 600;
-            font-size: 0.9rem;
-        }
-        .profile-chip .level-badge {
-            font-size: 0.75rem;
-            font-weight: 700;
-            padding: 3px 10px;
-            border-radius: 20px;
-            letter-spacing: 0.5px;
-        }
-        .lvl-1 { background: rgba(0,206,201,0.15); color: #00cec9; }
-        .lvl-2 { background: rgba(253,203,110,0.15); color: #fdcb6e; }
-        .lvl-3 { background: rgba(255,118,117,0.15); color: #ff7675; }
-        .lvl-4 { background: rgba(255,107,107,0.2); color: #ff6b6b; }
-
-        .btn-refresh {
-            background: transparent;
-            color: var(--text-muted);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 6px 14px;
-            font-family: 'Inter', sans-serif;
+        .profile-row .name {
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.8rem;
-            cursor: pointer;
-            transition: color 0.2s, border-color 0.2s;
-            float: right;
-            margin-top: -38px;
+            color: var(--text-bright);
         }
-        .btn-refresh:hover { color: var(--text); border-color: var(--accent); }
+        .profile-row .tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 3px;
+        }
+        .tag-1 { color: var(--green); background: rgba(61,220,132,0.1); }
+        .tag-2 { color: var(--yellow); background: rgba(229,192,123,0.1); }
+        .tag-3 { color: #e5a; background: rgba(238,85,170,0.1); }
+        .tag-4 { color: var(--red); background: rgba(238,85,85,0.1); }
 
-        /* ── Counter Badge ── */
-        .counter {
-            display: inline-flex;
+        .profiles-header {
+            display: flex;
+            justify-content: space-between;
             align-items: center;
-            justify-content: center;
-            background: var(--accent);
-            color: #fff;
-            font-size: 0.75rem;
-            font-weight: 700;
-            width: 24px; height: 24px;
-            border-radius: 50%;
-            margin-left: 8px;
-            vertical-align: middle;
+            margin-bottom: 10px;
         }
+        .profiles-header button {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            font-size: 0.7rem;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .profiles-header button:hover { color: var(--text); border-color: #444; }
 
-        /* ── Responsive ── */
-        @media (max-width: 640px) {
-            .search-row { flex-direction: column; }
-            .results-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+        @media (max-width: 600px) {
+            .input-row { flex-direction: column; }
+            .grid { grid-template-columns: repeat(2, 1fr); }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Fashion Bot 🕷️</h1>
-            <p>Extrator inteligente de imagens — Cole a URL e deixe o bot trabalhar</p>
-        </header>
+    <div class="shell">
+        <div class="topbar">
+            <h1>scrapper</h1>
+            <span>fashion image extractor</span>
+        </div>
 
-        <!-- Extract Section -->
-        <div class="card">
-            <div class="card-title">Extrair imagens</div>
-            <div class="search-row">
-                <input type="text" id="urlInput" placeholder="https://www.dafiti.com.br/produto-de-moda..." autocomplete="off" />
-                <select class="level-select" id="levelSelect">
-                    <option value="1">Nível 1</option>
-                    <option value="2">Nível 2</option>
-                    <option value="3">Nível 3</option>
-                    <option value="4">Nível 4</option>
+        <section>
+            <div class="section-label">URL do Produto</div>
+            <div class="input-row">
+                <input type="text" id="urlInput" placeholder="cole a url aqui" autocomplete="off" spellcheck="false" />
+                <select id="levelSelect">
+                    <option value="1">lvl 1</option>
+                    <option value="2">lvl 2</option>
+                    <option value="3">lvl 3</option>
+                    <option value="4">lvl 4</option>
                 </select>
-                <button class="btn-extract" id="btnExtract" onclick="extract()">Extrair</button>
+                <button id="btnGo" onclick="run()">extrair</button>
             </div>
-            <div class="status-bar" id="status">
-                <span class="dot dot-idle"></span>
-                <span>Aguardando URL...</span>
+            <div class="status" id="status"></div>
+        </section>
+
+        <section id="resultsSection" style="display:none;">
+            <div class="section-label">Resultado</div>
+            <div class="result-count" id="resultCount"></div>
+            <div class="grid" id="grid"></div>
+        </section>
+
+        <div class="empty" id="emptyMsg">nenhuma busca realizada</div>
+
+        <section>
+            <div class="profiles-header">
+                <div class="section-label" style="margin:0;">Domínios Conhecidos</div>
+                <button onclick="loadProfiles()">atualizar</button>
             </div>
-        </div>
-
-        <!-- Results Section -->
-        <div class="card" id="resultsCard" style="display:none;">
-            <div class="card-title">Resultados <span class="counter" id="imgCount">0</span></div>
-            <div class="results-grid" id="resultsGrid"></div>
-        </div>
-
-        <!-- Empty State -->
-        <div class="empty-state" id="emptyState">
-            <div class="icon">📸</div>
-            <p>Nenhuma imagem extraída ainda.<br>Cole uma URL acima para começar.</p>
-        </div>
-
-        <!-- Profiles Section -->
-        <div class="card">
-            <div class="card-title">Memória de Domínios</div>
-            <button class="btn-refresh" onclick="loadProfiles()">↻ Atualizar</button>
-            <div class="profiles-grid" id="profilesGrid">
-                <p style="color: var(--text-muted); font-size:0.85rem;">Carregando...</p>
+            <div id="profilesContainer">
+                <div class="empty">carregando...</div>
             </div>
-        </div>
+        </section>
     </div>
 
     <script>
-        const API = window.location.origin;
+        const API = location.origin;
 
-        function setStatus(type, msg) {
+        function setStatus(state, msg) {
             const el = document.getElementById('status');
-            const dotClass = { idle: 'dot-idle', loading: 'dot-loading', success: 'dot-success', error: 'dot-error' }[type];
-            el.innerHTML = `<span class="dot ${dotClass}"></span><span>${msg}</span>`;
+            el.dataset.state = state;
+            el.textContent = msg;
         }
 
-        async function extract() {
+        async function run() {
             const url = document.getElementById('urlInput').value.trim();
             if (!url) return;
-
-            const level = parseInt(document.getElementById('levelSelect').value);
-            const btn = document.getElementById('btnExtract');
+            const level = +document.getElementById('levelSelect').value;
+            const btn = document.getElementById('btnGo');
             btn.disabled = true;
 
-            setStatus('loading', 'Extraindo imagens… isso pode levar até 2 minutos.');
-            document.getElementById('emptyState').style.display = 'none';
-            document.getElementById('resultsCard').style.display = 'none';
+            setStatus('loading', 'processando...');
+            document.getElementById('emptyMsg').style.display = 'none';
+            document.getElementById('resultsSection').style.display = 'none';
 
             try {
-                const start = performance.now();
+                const t0 = performance.now();
                 const res = await fetch(`${API}/api/extract`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url, escalation_level: level })
                 });
-
                 if (!res.ok) {
-                    const err = await res.json();
-                    throw new Error(err.detail || res.statusText);
+                    const e = await res.json();
+                    throw new Error(e.detail || res.statusText);
                 }
+                const imgs = await res.json();
+                const sec = ((performance.now() - t0) / 1000).toFixed(1);
 
-                const images = await res.json();
-                const elapsed = ((performance.now() - start) / 1000).toFixed(1);
-
-                if (images.length === 0) {
-                    setStatus('error', `Nenhuma imagem encontrada (${elapsed}s).`);
-                    document.getElementById('emptyState').style.display = '';
+                if (!imgs.length) {
+                    setStatus('error', `0 imagens · ${sec}s`);
+                    document.getElementById('emptyMsg').textContent = 'nenhuma imagem encontrada para essa url';
+                    document.getElementById('emptyMsg').style.display = '';
                 } else {
-                    setStatus('success', `${images.length} imagem(ns) extraída(s) em ${elapsed}s`);
-                    renderImages(images);
+                    setStatus('done', `${imgs.length} imagen${imgs.length > 1 ? 's' : ''} · ${sec}s`);
+                    render(imgs);
                 }
                 loadProfiles();
             } catch (e) {
-                setStatus('error', `Erro: ${e.message}`);
-                document.getElementById('emptyState').style.display = '';
+                setStatus('error', e.message);
+                document.getElementById('emptyMsg').textContent = 'erro na extração';
+                document.getElementById('emptyMsg').style.display = '';
             } finally {
                 btn.disabled = false;
             }
         }
 
-        function renderImages(images) {
-            const grid = document.getElementById('resultsGrid');
+        function render(imgs) {
+            const grid = document.getElementById('grid');
             grid.innerHTML = '';
-            document.getElementById('imgCount').textContent = images.length;
-            document.getElementById('resultsCard').style.display = '';
+            document.getElementById('resultCount').textContent = `${imgs.length} archivo${imgs.length > 1 ? 's' : ''}`;
+            document.getElementById('resultsSection').style.display = '';
 
-            images.forEach(src => {
-                const card = document.createElement('div');
-                card.className = 'img-card';
-                card.innerHTML = `
-                    <img src="${src}" alt="Produto" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🖼️</text></svg>'" />
-                    <div class="img-overlay">
-                        <a href="${src}" target="_blank">Abrir ↗</a>
-                    </div>
+            imgs.forEach((src, i) => {
+                const div = document.createElement('div');
+                div.className = 'grid-item';
+                div.innerHTML = `
+                    <img src="${src}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'" />
+                    <a href="${src}" target="_blank"><span>abrir</span></a>
                 `;
-                grid.appendChild(card);
+                grid.appendChild(div);
             });
         }
 
         async function loadProfiles() {
-            const grid = document.getElementById('profilesGrid');
+            const el = document.getElementById('profilesContainer');
             try {
                 const res = await fetch(`${API}/api/profiles`);
                 const data = await res.json();
                 const entries = Object.entries(data);
-
-                if (entries.length === 0) {
-                    grid.innerHTML = '<p style="color: var(--text-muted); font-size:0.85rem;">Nenhum domínio salvo ainda.</p>';
+                if (!entries.length) {
+                    el.innerHTML = '<div class="empty">nenhum domínio registrado</div>';
                     return;
                 }
-
-                grid.innerHTML = entries.map(([domain, info]) => {
-                    const lvl = info.escalation_level || 1;
-                    return `
-                        <div class="profile-chip">
-                            <span class="domain">${domain}</span>
-                            <span class="level-badge lvl-${lvl}">LVL ${lvl}</span>
-                        </div>
-                    `;
-                }).join('');
+                el.innerHTML = `<div class="profiles-list">${entries.map(([d, info]) => {
+                    const l = info.escalation_level || 1;
+                    return `<div class="profile-row">
+                        <span class="name">${d}</span>
+                        <span class="tag tag-${l}">lvl ${l}</span>
+                    </div>`;
+                }).join('')}</div>`;
             } catch {
-                grid.innerHTML = '<p style="color: var(--danger); font-size:0.85rem;">Sem conexão com o banco.</p>';
+                el.innerHTML = '<div class="empty" style="color:var(--red)">sem conexão</div>';
             }
         }
 
-        // Enter key submits
-        document.getElementById('urlInput').addEventListener('keydown', e => {
-            if (e.key === 'Enter') extract();
-        });
-
-        // Load profiles on page load
+        document.getElementById('urlInput').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
         loadProfiles();
     </script>
 </body>
