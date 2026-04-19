@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import threading
@@ -51,6 +53,12 @@ def browser_worker():
                 future.set_exception(e)
 
 app = FastAPI(title="Fashion Bot API", description="API de extração escalonável de imagens de e-commerce")
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/dashboard/index.html")
+
+app.mount("/dashboard", StaticFiles(directory="static"), name="dashboard")
 
 @app.on_event("startup")
 def startup_event():
