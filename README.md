@@ -1,93 +1,144 @@
 # Fashion Bot Scrapper API 🛍️🕷️
 
-Um Web Scraper super furtivo (Stealth) e escalável construído em **Python** e **FastAPI**. Projetado meticulosamente para superar barreiras Anti-Bot agressivas, Captchas e *Login Walls* de gigantes do E-commerce de moda como Temu, Dafiti e Shopee.
+Um Web Scraper stealth e escalável construído em **Python** e **FastAPI**. Projetado para superar barreiras Anti-Bot agressivas, Captchas e *Login Walls* de gigantes do E-commerce como Temu, Dafiti e Shopee.
+
+![Dashboard Preview](https://img.shields.io/badge/Dashboard-Dark_Mode-6c5ce7?style=for-the-badge)
+![API](https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge)
+![DB](https://img.shields.io/badge/Database-PostgreSQL-336791?style=for-the-badge)
 
 ## Recursos Principais
 
-- **Stealth Embutido**: Utiliza internamente o `Camoufox` e rotinas assíncronas do Playwright para se camuflar perfeitamente, anulando "Cloudflare/Datadome JS challenges".
-- **Banco de Dados Resiliente (Memória)**: Usando **PostgreSQL**, o bot aprende em tempo-real por domínio qual nível de latência e força-bruta precisa usar para varrer uma foto. Se um site precisa de *network_idle* de SPA, ele vai persistir essa regra globalmente para poupar carregamento futuro no banco.
-- **RESTful API Native**: Funciona como um gateway de microserviço HTTP.
-- **Fila Única com Multithreading**: Você pode bater 10.000 URLs na API. O bot enfileirará todas mantendo 1 única aba furtiva isolada renderizando-as no background (Single-Worker Thread), driblando qualquer bloqueio de IP por enxurrada.
+- **Stealth Embutido**: Utiliza o `Camoufox` + Playwright para se camuflar e anular JS challenges (Cloudflare/Datadome).
+- **Memória Inteligente (PostgreSQL)**: O bot aprende em tempo real qual nível de agressividade cada domínio exige, persistindo essas regras no banco para otimizar buscas futuras.
+- **API RESTful**: Gateway HTTP para integração com qualquer serviço externo.
+- **Dashboard Web**: Interface visual embarcada para colar URLs e visualizar imagens extraídas com um clique.
+- **Fallback Googlebot SSR**: Quando um site bloqueia o browser (Login Wall), o bot faz uma requisição como Googlebot para extrair imagens do cache de SEO.
+- **Extração de URL Params**: Detecta imagens codificadas diretamente nos parâmetros da URL (ex: Temu `top_gallery_url`).
+- **Worker Queue Thread-Safe**: Fila única com uma aba stealth isolada, evitando detecção por concorrência.
 
 ---
 
-## 🚀 Como Rodar o Projeto
+## 🚀 Instalação e Execução
 
-Você tem duas formas de iniciar o Fashion Bot: de forma isolada no seu sistema ou inteiramente utilizando o Docker (Recomendado).
+### Opção 1: Docker (Recomendado)
 
-### Opção 1: Via Docker (Mais Fácil)
-
-Não gosta de configurar o Python local? Ótimo. A arquitetura em Docker é super enxuta.
-Como a memória reside agora num banco PostgreSQL, você precisa ter uma URL de conexão apontando pra um banco (Ex: Render, Supabase, ou outro servidor externo). 
+Você precisa de uma URL de conexão PostgreSQL (Supabase, Neon, Render, ou seu próprio servidor).
 
 ```bash
-# 1. Clone o projeto e entre na pasta
+# 1. Clone o projeto
 git clone https://github.com/XSirch/image-scrapper.git
 cd image-scrapper
 
 # 2. Exporte a URL do seu PostgreSQL
 export DATABASE_URL="postgresql://usuario:senha@seu-host.com:5432/nomedobanco"
-# (No Windows Powershell use $env:DATABASE_URL="...")
+# Windows PowerShell: $env:DATABASE_URL="postgresql://..."
 
-# 3. Suba o container 
+# 3. Suba o container
 docker-compose up -d --build
 ```
-Após o build finalizar, a API estará pronta recebendo em: `http://localhost:8000`
 
-### Opção 2: Localmente (Desenvolvedor)
+> O build usa **uv** para instalar dependências Python, o que é significativamente mais rápido que pip.
 
-Caso prefira rodar ou debugar o ambiente pela sua máquina.
+Após finalizar, acesse: `http://localhost:8000`
 
-**1. Instale o Ambiente**
+### Opção 2: Localmente (Desenvolvimento)
+
 ```bash
+# 1. Crie e ative o ambiente virtual
 python -m venv venv
-# ative (Windows: .\venv\Scripts\activate | Linux: source venv/bin/activate)
+# Windows: .\venv\Scripts\activate
+# Linux:   source venv/bin/activate
 
+# 2. Instale dependências
 pip install -r requirements.txt
-```
 
-**2. Instale o Motor Javascript do Playwright C++**
-O scrapper demanda os browsers furtivos, que são pesados na primeira vez (cerca de 200MB):
-```bash
+# 3. Instale os binários do Playwright
 playwright install chromium
 playwright install-deps chromium
-```
 
-**3. Inicie**
-Não esqueça o link do banco e o inicie no servidor ASGI (Uvicorn):
-```bash
+# 4. Configure a variável de ambiente do banco
+export DATABASE_URL="postgresql://usuario:senha@localhost:5432/botdb"
+
+# 5. Inicie o servidor
 uvicorn main:app --port 8000
 ```
 
 ---
 
-## 🛠 Entendendo a API REST
+## 🖥️ Dashboard Web
 
-Uma vez rodando, você terá uma documentação nativa em Interface Visual no link:
-👉 [http://localhost:8000/docs](http://localhost:8000/docs)
+Ao acessar `http://localhost:8000`, você será redirecionado automaticamente para o painel visual.
 
-Lá, você pode simular os endpoints na hora clicando em **Try it out**.
+**Funcionalidades do Dashboard:**
+- Campo de input para colar a URL do produto
+- Seletor de nível de escalada (1 a 4)
+- Grid de imagens extraídas com preview e link direto
+- Indicador de status em tempo real (aguardando / processando / sucesso / erro)
+- Painel de "Memória de Domínios" mostrando o nível aprendido de cada site
+
+---
+
+## 🛠️ API REST
+
+Documentação interativa (Swagger) disponível em: `http://localhost:8000/docs`
 
 ### `POST /api/extract`
-Busca as fotos "vivas" de um produto.
 
-**Payload Request:**
+Extrai imagens de produto de uma URL.
+
+**Request:**
 ```json
 {
   "url": "https://www.dafiti.com.br/algum-produto",
   "escalation_level": 1
 }
 ```
-*`escalation_level`: (1 a 4). 1 é o básico. 4 destrói banners da tela, ignora tabelas de tamanho e carrega pesadamente Javascripts escondidos.*
 
-**Response (200 OK):**
-Retorna uma lista JSON pura super limpa contendo apenas imagens que se encaixaram na heurística (são fotos altas e em CDNs).
+| Nível | Comportamento |
+|-------|--------------|
+| 1 | Extração rápida padrão |
+| 2 | Força `network_idle` para SPAs pesados |
+| 3 | Desativa filtros de similaridade |
+| 4 | Remove todos os filtros de ruído (banners, tabelas, ícones) |
+
+**Response (200):**
 ```json
 [
-  "https://static.dafiti.com.br/p/alguma-foto-1.jpg",
-  "https://static.dafiti.com.br/p/alguma-foto-2.jpg"
+  "https://static.dafiti.com.br/p/foto-1.jpg",
+  "https://static.dafiti.com.br/p/foto-2.jpg"
 ]
 ```
 
 ### `GET /api/profiles`
-Sobe todo o raciocínio construído pela inteligência de evasão em JSON tirado da sua base Postgres. Bom para monitorar quais sites estão pedindo timeout extremo.
+
+Retorna o banco de aprendizado de domínios.
+
+```json
+{
+  "shopee.com.br": { "escalation_level": 4, "wait_idle": true },
+  "dafiti.com.br": { "escalation_level": 2, "wait_idle": true }
+}
+```
+
+---
+
+## 📁 Estrutura do Projeto
+
+```
+├── main.py              # Servidor FastAPI + worker thread
+├── scrapper.py           # Lógica de extração e heurísticas
+├── database.py           # Driver PostgreSQL (CRUD + migração)
+├── static/index.html     # Dashboard web
+├── Dockerfile            # Imagem de produção (uv + Playwright)
+├── docker-compose.yml    # Orquestração do container
+├── requirements.txt      # Dependências Python
+└── app.py                # (Legacy) Interface desktop CustomTkinter
+```
+
+---
+
+## ⚙️ Variáveis de Ambiente
+
+| Variável | Descrição | Exemplo |
+|----------|-----------|---------|
+| `DATABASE_URL` | URL de conexão PostgreSQL | `postgresql://user:pass@host:5432/db` |
