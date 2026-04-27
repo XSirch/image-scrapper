@@ -14,7 +14,8 @@ Um Web Scraper stealth e escalável construído em **Python** e **FastAPI**. Pro
 - **Dashboard Web**: Interface visual embarcada para colar URLs e visualizar imagens extraídas com um clique.
 - **Fallback Googlebot SSR**: Quando um site bloqueia o browser (Login Wall), o bot faz uma requisição como Googlebot para extrair imagens do cache de SEO.
 - **Extração de URL Params**: Detecta imagens codificadas diretamente nos parâmetros da URL (ex: Temu `top_gallery_url`).
-- **Worker Queue Thread-Safe**: Fila única com uma aba stealth isolada, evitando detecção por concorrência.
+- **Pool de Workers Concorrentes**: Múltiplos browsers stealth em paralelo (configurável via `WORKER_COUNT`), cada um com sua própria sessão isolada. Suporta dezenas de clientes simultâneos.
+- **Monitoramento em Tempo Real**: Endpoint `/api/status` para acompanhar workers ativos, fila de espera e estatísticas de performance.
 
 ---
 
@@ -84,7 +85,7 @@ Documentação interativa (Swagger) disponível em: `http://localhost:8000/docs`
 
 ### `POST /api/extract`
 
-Extrai imagens de produto de uma URL.
+Extrai imagens de produto de uma URL. **Suporta múltiplos requests simultâneos** — cada um é distribuído automaticamente para um worker disponível no pool.
 
 **Request:**
 ```json
@@ -109,6 +110,31 @@ Extrai imagens de produto de uma URL.
 ]
 ```
 
+### `GET /api/status`
+
+Retorna o estado atual do sistema: pool de workers, fila e estatísticas.
+
+```json
+{
+  "worker_pool": {
+    "configured": 3,
+    "alive": 3,
+    "busy": 2,
+    "idle": 1
+  },
+  "queue_depth": 0,
+  "active_tasks": {
+    "worker-0": { "url": "https://...", "request_id": "a1b2c3d4", "running_for_seconds": 5.3 }
+  },
+  "stats": {
+    "total_requests": 42,
+    "completed": 38,
+    "failed": 2,
+    "timed_out": 2
+  }
+}
+```
+
 ### `GET /api/profiles`
 
 Retorna o banco de aprendizado de domínios.
@@ -125,7 +151,7 @@ Retorna o banco de aprendizado de domínios.
 ## 📁 Estrutura do Projeto
 
 ```
-├── main.py              # Servidor FastAPI + worker thread
+├── main.py              # Servidor FastAPI + pool de workers concorrentes
 ├── scrapper.py           # Lógica de extração e heurísticas
 ├── database.py           # Driver PostgreSQL (CRUD + migração)
 ├── static/index.html     # Dashboard web
@@ -139,6 +165,10 @@ Retorna o banco de aprendizado de domínios.
 
 ## ⚙️ Variáveis de Ambiente
 
-| Variável | Descrição | Exemplo |
+| Variável | Descrição | Default |
 |----------|-----------|---------|
 | `DATABASE_URL` | URL de conexão PostgreSQL | `postgresql://user:pass@host:5432/db` |
+| `WORKER_COUNT` | Número de browsers stealth simultâneos | `3` |
+| `REQUEST_TIMEOUT` | Timeout máximo por request (segundos) | `120` |
+
+> **💡 Dimensionamento:** Cada worker consome ~300-500MB de RAM. Para uma VPS com 4GB, use `WORKER_COUNT=3`. Para 8GB, pode subir para `WORKER_COUNT=6`.

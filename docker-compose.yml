@@ -8,6 +8,9 @@ services:
       - "8000:8000"
     restart: unless-stopped
     environment:
-      # O app vai ler essa string do seu terminal/sistema (.env) pra conectar na sua VPS
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=${DATABASE_URL}
+      # Quantidade de browsers stealth simultâneos (cada um usa ~300-500MB RAM)
+      - WORKER_COUNT=${WORKER_COUNT:-3}
+      # Timeout máximo por request em segundos
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-120}
