@@ -2,6 +2,7 @@
 
 Um Web Scraper stealth e escalável construído em **Python** e **FastAPI**. Projetado para superar barreiras Anti-Bot agressivas, Captchas e *Login Walls* de gigantes do E-commerce como Temu, Dafiti e Shopee.
 
+![Version](https://img.shields.io/badge/version-0.2.1-blue?style=for-the-badge)
 ![Dashboard Preview](https://img.shields.io/badge/Dashboard-Dark_Mode-6c5ce7?style=for-the-badge)
 ![API](https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge)
 ![DB](https://img.shields.io/badge/Database-PostgreSQL-336791?style=for-the-badge)
