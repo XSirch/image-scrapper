@@ -3,12 +3,46 @@ import argparse
 import sys
 import json
 import os
+import re
+import requests
 from urllib.parse import urlparse, urljoin
 from scrapling.fetchers import StealthyFetcher
 
 MEMORY_FILE = 'site_profiles.json'
 
+# Domínios de encurtadores conhecidos que devem ser resolvidos antes do scraping
+SHORT_URL_DOMAINS = ['shp.ee', 'sho.pe', 's.shopee']
+
 import database
+
+def resolve_short_url(url):
+    """
+    Resolve URLs encurtadas (ex: br.shp.ee/xxx) para a URL final do produto.
+    Retorna a URL resolvida ou a original se não for um short URL.
+    """
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower()
+    
+    # Verifica se é um domínio de short URL conhecido
+    is_short = any(domain.endswith(d) for d in SHORT_URL_DOMAINS)
+    if not is_short:
+        return url
+    
+    logging.info(f"[ShortURL] Detectado link encurtado ({domain}). Resolvendo...")
+    try:
+        r = requests.get(url, allow_redirects=True, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        })
+        resolved = r.url
+        # Remove tracking params para ter uma URL limpa
+        parsed_resolved = urlparse(resolved)
+        # Mantém apenas o path essencial
+        clean_url = f"{parsed_resolved.scheme}://{parsed_resolved.netloc}{parsed_resolved.path}"
+        logging.info(f"[ShortURL] Resolvido: {url} → {clean_url}")
+        return clean_url
+    except Exception as e:
+        logging.error(f"[ShortURL] Falha ao resolver {url}: {e}")
+        return url
 
 def mark_escalation_required(domain, level):
     try:
@@ -17,14 +51,65 @@ def mark_escalation_required(domain, level):
     except Exception as e:
         logging.error(f"Failed to update profile memory for {domain}: {e}")
 
+def _extract_via_shopee_api(url, domain):
+    """
+    Fallback para Shopee: extrai shop_id e item_id da URL do produto
+    e tenta buscar imagens via API interna da Shopee com headers de browser real.
+    """
+    # Extrair IDs do produto da URL
+    match = re.search(r'/product/(\d+)/(\d+)', url)
+    if not match:
+        match = re.search(r'-i\.(\d+)\.(\d+)', url)
+    
+    if not match:
+        logging.info(f"[{domain}] Shopee API: Não foi possível extrair shop_id/item_id da URL")
+        return []
+    
+    shop_id = match.group(1)
+    item_id = match.group(2)
+    logging.info(f"[{domain}] Shopee API: Extraído shop_id={shop_id}, item_id={item_id}")
+    
+    # Tentar via sessão com cookies
+    try:
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        })
+        # Visitar a homepage para pegar cookies (SPC_F, etc)
+        session.get(f"https://{domain}", timeout=10)
+        
+        api_url = f"https://{domain}/api/v4/pdp/get_pc?shop_id={shop_id}&item_id={item_id}"
+        r = session.get(api_url, headers={
+            "Referer": f"https://{domain}/product/{shop_id}/{item_id}",
+            "X-Requested-With": "XMLHttpRequest",
+        }, timeout=15)
+        
+        if r.status_code == 200:
+            data = r.json()
+            images = data.get('data', {}).get('images', [])
+            if images:
+                cdn_host = f"down-br.img.susercontent.com"
+                # Detectar o CDN regional correto
+                locale = domain.split('.')[-1] if '.' in domain else 'br'
+                cdn_host = f"down-{locale}.img.susercontent.com"
+                product_images = [f"https://{cdn_host}/file/{h}" for h in images]
+                logging.info(f"[{domain}] Shopee API: {len(product_images)} imagens encontradas!")
+                return product_images
+        
+        logging.info(f"[{domain}] Shopee API retornou status {r.status_code}")
+    except Exception as e:
+        logging.info(f"[{domain}] Shopee API erro: {e}")
+    
+    return []
+
 def _extract_via_googlebot(url, domain):
     """
-    Fallback para sites com Login Wall (ex: Shopee).
+    Fallback para sites com Login Wall.
     Faz uma requisição simples com User-Agent do Googlebot, que recebe a versão SSR (Server-Side Rendered) da página,
     contendo os dados do produto embutidos para indexação. Extrai os hashes de imagem do CDN e filtra por resolução real.
+    Se o Googlebot retornar 403, tenta o fallback específico da Shopee (API).
     """
-    import requests
-    import re
     
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
@@ -33,6 +118,12 @@ def _extract_via_googlebot(url, domain):
     
     try:
         r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code == 403:
+            logging.info(f"[{domain}] Googlebot SSR bloqueado (403). Tentando fallback Shopee API...")
+            # Tentar fallback via API da Shopee
+            if 'shopee' in domain:
+                return _extract_via_shopee_api(url, domain)
+            return []
         if r.status_code != 200:
             logging.info(f"[{domain}] Googlebot SSR falhou: status {r.status_code}")
             return []
@@ -48,6 +139,9 @@ def _extract_via_googlebot(url, domain):
     
     if not matches:
         logging.info(f"[{domain}] Googlebot SSR: nenhum CDN de imagens encontrado no HTML.")
+        # Se for Shopee, tentar fallback API
+        if 'shopee' in domain:
+            return _extract_via_shopee_api(url, domain)
         return []
     
     # Agrupar por CDN host e pegar hashes únicos
@@ -81,6 +175,9 @@ def extract_product_images(url, session=None, wait_idle=False, escalation_level=
     """
     Extracts product images from a fashion e-commerce URL using heuristics.
     """
+    # Resolver short URLs ANTES de tudo (ex: br.shp.ee/xxx → shopee.com.br/product/...)
+    url = resolve_short_url(url)
+    
     domain = urlparse(url).netloc
     if domain.startswith('www.'):
         domain = domain[4:]

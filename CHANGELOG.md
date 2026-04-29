@@ -6,6 +6,18 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ---
 
+## [0.2.2] - 2026-04-29
+
+### Adicionado
+- **Resolução de Short URLs**: links encurtados (`br.shp.ee`, `sho.pe`, etc.) são resolvidos automaticamente via HTTP redirect antes do scraping
+- **Fallback Shopee API**: quando Googlebot SSR retorna 403, tenta extrair imagens via API interna da Shopee usando `shop_id`/`item_id` da URL
+
+### Corrigido
+- Links da Shopee compartilhados via app (`br.shp.ee/xxx`) não eram reconhecidos como `shopee.com.br`, impedindo a aplicação do perfil de escalação correto
+- Fallback Googlebot SSR falhava silenciosamente (403) sem tentar estratégias alternativas
+
+---
+
 ## [0.2.1] - 2026-04-27
 
 ### Adicionado
