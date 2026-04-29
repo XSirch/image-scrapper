@@ -9,11 +9,12 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [0.2.3] - 2026-04-29
 
 ### Adicionado
-- **Browser API Fallback**: quando a Shopee bloqueia o browser com traffic wall, reutiliza a sessão headless (que já possui cookies e tokens anti-crawler) para acessar a API de produto diretamente, extraindo hashes de imagem do JSON
-- **Cadeia de fallbacks completa para Shopee**: Browser API → Googlebot SSR → Shopee API (requests) — 3 estratégias em cascata
+- **Multi-Crawler SSR Fallback**: sistema agora tenta múltiplos User-Agents de crawlers (Googlebot, FacebookBot) em cascata para obter HTML renderizado server-side
+- **FacebookBot como crawler principal para Shopee**: a Shopee bloqueia Googlebot (403) mas serve conteúdo SSR completo para `facebookexternalhit`, incluindo todas as imagens do produto
+- **Browser API Fallback**: para Shopee, tenta reutilizar a sessão headless com cookies anti-crawler para acessar a API JSON diretamente
 
 ### Corrigido
-- Anti-bot wall da Shopee (`verify/traffic/error?type=4`) causava retorno de 0 imagens mesmo com sessão de browser válida
+- Anti-bot wall da Shopee (`verify/traffic/error?type=4`) causava retorno de 0 imagens — agora extrai 14 imagens via FacebookBot SSR
 
 ---
 

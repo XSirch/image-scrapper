@@ -106,40 +106,54 @@ def _extract_via_shopee_api(url, domain):
 def _extract_via_googlebot(url, domain):
     """
     Fallback para sites com Login Wall.
-    Faz uma requisição simples com User-Agent do Googlebot, que recebe a versão SSR (Server-Side Rendered) da página,
-    contendo os dados do produto embutidos para indexação. Extrai os hashes de imagem do CDN e filtra por resolução real.
-    Se o Googlebot retornar 403, tenta o fallback específico da Shopee (API).
+    Tenta múltiplos User-Agents de crawlers conhecidos (Googlebot, Facebook, etc.)
+    para obter a versão SSR (Server-Side Rendered) da página com dados do produto.
+    A Shopee, por exemplo, bloqueia Googlebot (403) mas serve conteúdo completo
+    para o crawler do Facebook (facebookexternalhit).
     """
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-        "Accept": "text/html,application/xhtml+xml",
-    }
+    # Lista de crawlers para tentar em ordem de prioridade
+    crawlers = [
+        ("Googlebot", {
+            "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+            "Accept": "text/html,application/xhtml+xml",
+        }),
+        ("FacebookBot", {
+            "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+            "Accept": "text/html",
+        }),
+    ]
     
-    try:
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code == 403:
-            logging.info(f"[{domain}] Googlebot SSR bloqueado (403). Tentando fallback Shopee API...")
-            # Tentar fallback via API da Shopee
-            if 'shopee' in domain:
-                return _extract_via_shopee_api(url, domain)
-            return []
-        if r.status_code != 200:
-            logging.info(f"[{domain}] Googlebot SSR falhou: status {r.status_code}")
-            return []
-    except Exception as e:
-        logging.info(f"[{domain}] Googlebot SSR erro: {e}")
+    html = None
+    for crawler_name, headers in crawlers:
+        try:
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code == 200:
+                # Verificar se o conteúdo tem dados úteis (não é só SPA shell)
+                cdn_pattern = r'(down-[a-z]+\.img\.susercontent\.com)/file/([a-zA-Z0-9_-]+)'
+                if re.search(cdn_pattern, r.text) or 'og:image' in r.text:
+                    logging.info(f"[{domain}] {crawler_name} SSR: Conteúdo com imagens encontrado!")
+                    html = r.text
+                    break
+                else:
+                    logging.info(f"[{domain}] {crawler_name} SSR: 200 mas sem imagens no HTML, tentando próximo...")
+            else:
+                logging.info(f"[{domain}] {crawler_name} SSR: bloqueado (status {r.status_code})")
+        except Exception as e:
+            logging.info(f"[{domain}] {crawler_name} SSR erro: {e}")
+    
+    if not html:
+        logging.info(f"[{domain}] Todos os crawlers SSR falharam.")
+        if 'shopee' in domain:
+            return _extract_via_shopee_api(url, domain)
         return []
-    
-    html = r.text
     
     # Detectar domínio de CDN de imagens (ex: down-br.img.susercontent.com)
     cdn_pattern = r'(down-[a-z]+\.img\.susercontent\.com)/file/([a-zA-Z0-9_-]+)'
     matches = re.findall(cdn_pattern, html)
     
     if not matches:
-        logging.info(f"[{domain}] Googlebot SSR: nenhum CDN de imagens encontrado no HTML.")
-        # Se for Shopee, tentar fallback API
+        logging.info(f"[{domain}] Crawler SSR: nenhum CDN de imagens encontrado no HTML.")
         if 'shopee' in domain:
             return _extract_via_shopee_api(url, domain)
         return []
@@ -147,7 +161,7 @@ def _extract_via_googlebot(url, domain):
     # Agrupar por CDN host e pegar hashes únicos
     cdn_host = matches[0][0]
     unique_hashes = list(set(h for _, h in matches))
-    logging.info(f"[{domain}] Googlebot SSR: {len(unique_hashes)} hashes únicos encontrados no CDN {cdn_host}")
+    logging.info(f"[{domain}] Crawler SSR: {len(unique_hashes)} hashes únicos encontrados no CDN {cdn_host}")
     
     # Filtrar por resolução real (baixar header de cada imagem e verificar dimensões)
     product_images = []
@@ -166,7 +180,7 @@ def _extract_via_googlebot(url, domain):
         except Exception:
             pass
     
-    logging.info(f"[{domain}] Googlebot SSR: {len(product_images)} imagens de produto (>= 200px) encontradas!")
+    logging.info(f"[{domain}] Crawler SSR: {len(product_images)} imagens de produto (>= 200px) encontradas!")
     return product_images
 
 def _extract_via_browser_api(url, domain, session):
