@@ -169,6 +169,90 @@ def _extract_via_googlebot(url, domain):
     logging.info(f"[{domain}] Googlebot SSR: {len(product_images)} imagens de produto (>= 200px) encontradas!")
     return product_images
 
+def _extract_via_browser_api(url, domain, session):
+    """
+    Fallback para Shopee usando a sessão do BROWSER HEADLESS para acessar a API.
+    Diferente do _extract_via_shopee_api (que usa requests puro e é bloqueado),
+    essa função reutiliza a sessão Playwright/Camoufox que já passou pelo fingerprinting
+    e possui cookies anti-crawler válidos (SPC_F, SPC_EC, etc).
+    """
+    # Extrair IDs do produto da URL
+    match = re.search(r'/product/(\d+)/(\d+)', url)
+    if not match:
+        match = re.search(r'-i\.(\d+)\.(\d+)', url)
+    
+    if not match:
+        logging.info(f"[{domain}] Browser API: Não foi possível extrair shop_id/item_id")
+        return []
+    
+    shop_id = match.group(1)
+    item_id = match.group(2)
+    
+    # Detectar CDN regional
+    locale_map = {'br': 'br', 'co.id': 'id', 'sg': 'sg', 'com.my': 'my', 'co.th': 'th', 'vn': 'vn', 'ph': 'ph', 'tw': 'tw'}
+    cdn_locale = 'br'  # default
+    for suffix, loc in locale_map.items():
+        if domain.endswith(suffix):
+            cdn_locale = loc
+            break
+    cdn_host = f"down-{cdn_locale}.img.susercontent.com"
+    
+    api_url = f"https://{domain}/api/v4/pdp/get_pc?shop_id={shop_id}&item_id={item_id}"
+    logging.info(f"[{domain}] Browser API: Buscando dados via sessão headless ({api_url})")
+    
+    try:
+        api_page = session.fetch(api_url, network_idle=False)
+        # O conteúdo da API é JSON renderizado como texto no body do browser
+        import json
+        body_text = api_page.css('body')[0].text if api_page.css('body') else ''
+        # Às vezes o browser renderiza JSON dentro de um <pre> tag
+        if not body_text:
+            pre_tags = api_page.css('pre')
+            if pre_tags:
+                body_text = pre_tags[0].text
+        
+        if not body_text:
+            logging.info(f"[{domain}] Browser API: Resposta vazia")
+            return []
+        
+        data = json.loads(body_text)
+        
+        # Extrair imagens do JSON da API
+        item_data = data.get('data', {})
+        images = item_data.get('images', [])
+        
+        if images:
+            product_images = [f"https://{cdn_host}/file/{h}" for h in images]
+            logging.info(f"[{domain}] Browser API: {len(product_images)} imagens encontradas!")
+            return product_images
+        
+        # Fallback: tentar extrair CDN URLs diretamente do texto JSON
+        cdn_pattern = r'(down-[a-z]+\.img\.susercontent\.com)/file/([a-zA-Z0-9_-]+)'
+        matches = re.findall(cdn_pattern, body_text)
+        if matches:
+            unique_hashes = list(set(h for _, h in matches))
+            cdn_host_found = matches[0][0]
+            product_images = [f"https://{cdn_host_found}/file/{h}" for h in unique_hashes]
+            logging.info(f"[{domain}] Browser API (regex): {len(product_images)} imagens encontradas!")
+            return product_images
+        
+        logging.info(f"[{domain}] Browser API: Nenhuma imagem no JSON (error={data.get('error', 'N/A')})")
+    except json.JSONDecodeError as e:
+        logging.info(f"[{domain}] Browser API: Resposta não é JSON válido: {e}")
+        # Tentar extrair CDN URLs do HTML bruto (caso Shopee tenha retornado HTML)
+        raw_html = str(api_page.html) if hasattr(api_page, 'html') else ''
+        cdn_pattern = r'(down-[a-z]+\.img\.susercontent\.com)/file/([a-zA-Z0-9_-]+)'
+        matches = re.findall(cdn_pattern, raw_html)
+        if matches:
+            unique_hashes = list(set(h for _, h in matches))
+            product_images = [f"https://{matches[0][0]}/file/{h}" for h in unique_hashes]
+            logging.info(f"[{domain}] Browser API (HTML fallback): {len(product_images)} imagens!")
+            return product_images
+    except Exception as e:
+        logging.info(f"[{domain}] Browser API erro: {e}")
+    
+    return []
+
 # Fashion product pages generally have large images in galleries.
 # We will use Scrapling's StealthyFetcher to bypass possible basic bot protections.
 def extract_product_images(url, session=None, wait_idle=False, escalation_level=1):
@@ -227,11 +311,22 @@ def extract_product_images(url, session=None, wait_idle=False, escalation_level=
         else:
             page = StealthyFetcher.fetch(url, headless=True, network_idle=wait_idle)
             
-        # Anti-Bot Wall Detection & Recovery via Googlebot SSR (Login, Captcha, Traffic)
-        # Anti-Bot Wall Detection & Recovery via Googlebot SSR (Login, Captcha, Traffic)
+        # Anti-Bot Wall Detection & Recovery (Login, Captcha, Traffic Verification)
         page_url_lower = page.url.lower()
         if 'login' in page_url_lower or 'signin' in page_url_lower or 'verify' in page_url_lower or 'captcha' in page_url_lower:
             logging.info(f"[{domain}] Anti-Bot/Login Wall Detectado! ({page.url})")
+            
+            # Estratégia 1: Para Shopee, usar a sessão do browser para acessar a API diretamente
+            # O browser já tem cookies válidos e tokens anti-crawler do fingerprinting
+            if 'shopee' in domain and session:
+                logging.info(f"[{domain}] Tentando extração via Browser API (sessão headless com cookies)...")
+                browser_images = _extract_via_browser_api(url, domain, session)
+                if browser_images:
+                    images.update(browser_images)
+                    return list(images)
+                logging.info(f"[{domain}] Browser API não retornou imagens. Tentando Googlebot SSR...")
+            
+            # Estratégia 2: Fallback via Googlebot SSR (funciona para sites que servem SSR ao Google)
             logging.info(f"[{domain}] Ativando fallback Googlebot SSR para extrair imagens do cache de SEO...")
             fallback_images = _extract_via_googlebot(url, domain)
             images.update(fallback_images)
