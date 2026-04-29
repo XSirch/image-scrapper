@@ -122,25 +122,41 @@ def _extract_via_googlebot(url, domain):
             "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
             "Accept": "text/html",
         }),
+        ("WhatsApp", {
+            "User-Agent": "WhatsApp/2.23.20.0",
+            "Accept": "text/html",
+        }),
     ]
     
     html = None
     for crawler_name, headers in crawlers:
-        try:
-            r = requests.get(url, headers=headers, timeout=15)
-            if r.status_code == 200:
-                # Verificar se o conteúdo tem dados úteis (não é só SPA shell)
-                cdn_pattern = r'(down-[a-z]+\.img\.susercontent\.com)/file/([a-zA-Z0-9_-]+)'
-                if re.search(cdn_pattern, r.text) or 'og:image' in r.text:
-                    logging.info(f"[{domain}] {crawler_name} SSR: Conteúdo com imagens encontrado!")
-                    html = r.text
-                    break
+        # Tentar até 2x com backoff para lidar com rate limiting (5xx)
+        for attempt in range(2):
+            try:
+                r = requests.get(url, headers=headers, timeout=15)
+                if r.status_code == 200:
+                    # Verificar se o conteúdo tem dados úteis (não é só SPA shell)
+                    cdn_pattern = r'(down-[a-z]+\.img\.susercontent\.com)/file/([a-zA-Z0-9_-]+)'
+                    if re.search(cdn_pattern, r.text) or 'og:image' in r.text:
+                        logging.info(f"[{domain}] {crawler_name} SSR: Conteúdo com imagens encontrado!")
+                        html = r.text
+                        break
+                    else:
+                        logging.info(f"[{domain}] {crawler_name} SSR: 200 mas sem imagens no HTML, tentando próximo...")
+                        break  # 200 sem conteúdo = não adianta retry
+                elif r.status_code >= 500 and attempt == 0:
+                    import time
+                    logging.info(f"[{domain}] {crawler_name} SSR: erro servidor ({r.status_code}), retry em 2s...")
+                    time.sleep(2)
+                    continue
                 else:
-                    logging.info(f"[{domain}] {crawler_name} SSR: 200 mas sem imagens no HTML, tentando próximo...")
-            else:
-                logging.info(f"[{domain}] {crawler_name} SSR: bloqueado (status {r.status_code})")
-        except Exception as e:
-            logging.info(f"[{domain}] {crawler_name} SSR erro: {e}")
+                    logging.info(f"[{domain}] {crawler_name} SSR: bloqueado (status {r.status_code})")
+                    break  # 4xx = não adianta retry
+            except Exception as e:
+                logging.info(f"[{domain}] {crawler_name} SSR erro: {e}")
+                break
+        if html:
+            break
     
     if not html:
         logging.info(f"[{domain}] Todos os crawlers SSR falharam.")
