@@ -15,6 +15,26 @@ SHORT_URL_DOMAINS = ['shp.ee', 'sho.pe', 's.shopee']
 
 import database
 
+SHEIN_PRODUCT_IMAGE_PATHS = (
+    '/images3_pi/',
+    '/images3_spmp/',
+    '/images_pi/',
+    '/images_spmp/',
+)
+
+SHEIN_IMAGE_KEYS = {
+    'goods_img',
+    'detail_image',
+    'detail_image_url',
+    'main_image',
+    'main_image_url',
+    'image',
+    'image_url',
+    'images',
+    'img_url',
+    'src',
+}
+
 def resolve_short_url(url):
     """
     Resolve URLs encurtadas (ex: br.shp.ee/xxx) para a URL final do produto.
@@ -50,6 +70,191 @@ def mark_escalation_required(domain, level):
         database.upsert_profile(domain, level, wait_idle)
     except Exception as e:
         logging.error(f"Failed to update profile memory for {domain}: {e}")
+
+def _domain_from_url(url):
+    domain = urlparse(url).netloc
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    return domain
+
+def _retry_escalation_levels(start_level, max_attempts=3):
+    start_level = max(1, min(int(start_level or 1), 4))
+    levels = []
+    level = start_level
+    while len(levels) < max_attempts and level <= 4:
+        levels.append(level)
+        level += 1
+    return levels
+
+def _is_shein_domain(domain):
+    return 'shein.com' in domain
+
+def _extract_shein_product_params(url):
+    parsed = urlparse(url)
+    match = re.search(r'-p-(\d+)\.html', parsed.path)
+    goods_id = match.group(1) if match else None
+
+    mall_code = None
+    try:
+        from urllib.parse import parse_qs
+        qs = parse_qs(parsed.query)
+        mall_values = qs.get('mallCode') or qs.get('mall_code')
+        if mall_values:
+            mall_code = mall_values[0]
+    except Exception:
+        mall_code = None
+
+    return goods_id, mall_code
+
+def _normalize_shein_image_url(value):
+    if not value or not isinstance(value, str):
+        return None
+
+    value = value.strip().strip('"').strip("'")
+    value = value.replace('\\/', '/')
+    if value.startswith('//'):
+        value = f"https:{value}"
+    elif value.startswith('http://'):
+        value = f"https://{value[len('http://'):]}"
+
+    if not value.startswith('https://'):
+        return None
+
+    parsed = urlparse(value)
+    if parsed.netloc not in ('img.ltwebstatic.com', 'img.shein.com', 'img.romwe.com'):
+        return None
+
+    if not any(path in parsed.path for path in SHEIN_PRODUCT_IMAGE_PATHS):
+        return None
+
+    if not re.search(r'\.(jpe?g|png|webp)(?:$|\?)', parsed.path.lower()):
+        return None
+
+    return value
+
+def _is_shein_risk_page(page_url='', html=''):
+    page_url = (page_url or '').lower()
+    html = html or ''
+    if '/risk/challenge' in page_url or '/risk/action/limit' in page_url or 'captcha_type=' in page_url:
+        return True
+    if '/risk/challenge' in html or '/risk/action/limit' in html or 'captcha_type' in html:
+        return True
+    return False
+
+def _collect_shein_images_from_data(data, images, trusted=False):
+    if isinstance(data, dict):
+        for key, value in data.items():
+            key_trusted = trusted or str(key).lower() in SHEIN_IMAGE_KEYS
+            _collect_shein_images_from_data(value, images, trusted=key_trusted)
+    elif isinstance(data, list):
+        for item in data:
+            _collect_shein_images_from_data(item, images, trusted=trusted)
+    elif trusted and isinstance(data, str):
+        image_url = _normalize_shein_image_url(data)
+        if image_url:
+            images.add(image_url)
+
+def _extract_shein_images_from_html(html, page_url=''):
+    if not html or _is_shein_risk_page(page_url, html):
+        return []
+
+    images = set()
+
+    meta_pattern = r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)["\']'
+    for match in re.findall(meta_pattern, html, flags=re.IGNORECASE):
+        image_url = _normalize_shein_image_url(match)
+        if image_url:
+            images.add(image_url)
+
+    json_ld_pattern = r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>'
+    for script_text in re.findall(json_ld_pattern, html, flags=re.IGNORECASE | re.DOTALL):
+        try:
+            _collect_shein_images_from_data(json.loads(script_text), images, trusted=True)
+        except Exception:
+            pass
+
+    key_pattern = r'"(?:goods_img|detail_image|main_image|image_url|img_url|src)"\s*:\s*("(?:\\.|[^"\\])*"|\[(?:\\.|[^\]])*\])'
+    for raw_value in re.findall(key_pattern, html, flags=re.IGNORECASE):
+        try:
+            parsed_value = json.loads(raw_value)
+            _collect_shein_images_from_data(parsed_value, images, trusted=True)
+        except Exception:
+            image_url = _normalize_shein_image_url(raw_value)
+            if image_url:
+                images.add(image_url)
+
+    direct_pattern = r'(?:https?:)?//img\.ltwebstatic\.com/[^"\'<>\s\\]+'
+    for match in re.findall(direct_pattern, html):
+        image_url = _normalize_shein_image_url(match)
+        if image_url:
+            images.add(image_url)
+
+    return list(images)
+
+def _extract_via_shein_api(url, domain, session=None):
+    goods_id, mall_code = _extract_shein_product_params(url)
+    if not goods_id:
+        logging.info(f"[{domain}] SHEIN API: não foi possível extrair goods_id da URL")
+        return []
+
+    api_url = f"https://{domain}/api/productInfo/quickView/get?goods_id={goods_id}"
+    if mall_code:
+        api_url = f"{api_url}&mallCode={mall_code}"
+
+    logging.info(f"[{domain}] SHEIN API: buscando dados best-effort ({api_url})")
+
+    try:
+        if session:
+            api_page = session.fetch(api_url, network_idle=False)
+            page_url = getattr(api_page, 'url', api_url)
+            body_text = api_page.css('body')[0].text if api_page.css('body') else ''
+            if not body_text:
+                pre_tags = api_page.css('pre')
+                if pre_tags:
+                    body_text = pre_tags[0].text
+
+            if _is_shein_risk_page(page_url, body_text):
+                logging.info(f"[{domain}] SHEIN API: bloqueada por página de risco ({page_url})")
+                return []
+
+            data = json.loads(body_text)
+        else:
+            r = requests.get(api_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+                "Accept": "application/json,text/plain,*/*",
+                "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+                "Referer": url,
+            }, timeout=15)
+
+            content_type = r.headers.get('content-type', '').lower()
+            if _is_shein_risk_page(r.url, r.text) or 'json' not in content_type:
+                logging.info(f"[{domain}] SHEIN API: resposta não JSON ou bloqueada ({r.status_code}, {r.url})")
+                return []
+
+            data = r.json()
+
+        images = set()
+        _collect_shein_images_from_data(data, images)
+        if images:
+            logging.info(f"[{domain}] SHEIN API: {len(images)} imagens encontradas!")
+            return list(images)
+
+        logging.info(f"[{domain}] SHEIN API: JSON sem imagens de produto")
+    except Exception as e:
+        logging.info(f"[{domain}] SHEIN API erro: {e}")
+
+    return []
+
+def _extract_via_shein(url, domain, session=None, html=None, page_url=''):
+    html_images = _extract_shein_images_from_html(html, page_url=page_url) if html else []
+    if html_images:
+        logging.info(f"[{domain}] SHEIN HTML: {len(html_images)} imagens encontradas!")
+        return html_images
+
+    if html and _is_shein_risk_page(page_url, html):
+        logging.info(f"[{domain}] SHEIN HTML: página de risco detectada; ignorando assets de layout.")
+
+    return _extract_via_shein_api(url, domain, session=session)
 
 def _extract_via_shopee_api(url, domain):
     """
@@ -135,6 +340,19 @@ def _extract_via_googlebot(url, domain):
             try:
                 r = requests.get(url, headers=headers, timeout=15)
                 if r.status_code == 200:
+                    if _is_shein_domain(domain):
+                        if _is_shein_risk_page(r.url, r.text):
+                            logging.info(f"[{domain}] {crawler_name} SSR: página de risco SHEIN detectada ({r.url}), tentando próximo...")
+                            break
+
+                        shein_images = _extract_shein_images_from_html(r.text, page_url=r.url)
+                        if shein_images:
+                            logging.info(f"[{domain}] {crawler_name} SSR: {len(shein_images)} imagens SHEIN encontradas!")
+                            return shein_images
+
+                        logging.info(f"[{domain}] {crawler_name} SSR: HTML SHEIN sem dados de produto, tentando próximo...")
+                        break
+
                     # Verificar se o conteúdo tem dados úteis (não é só SPA shell)
                     cdn_pattern = r'(down-[a-z]+\.img\.susercontent\.com)/file/([a-zA-Z0-9_-]+)'
                     if re.search(cdn_pattern, r.text) or 'og:image' in r.text:
@@ -286,42 +504,60 @@ def _extract_via_browser_api(url, domain, session):
 # Fashion product pages generally have large images in galleries.
 # We will use Scrapling's StealthyFetcher to bypass possible basic bot protections.
 def extract_product_images(url, session=None, wait_idle=False, escalation_level=1):
-    """
-    Extracts product images from a fashion e-commerce URL using heuristics.
-    """
-    # Resolver short URLs ANTES de tudo (ex: br.shp.ee/xxx → shopee.com.br/product/...)
     url = resolve_short_url(url)
-    
-    domain = urlparse(url).netloc
-    if domain.startswith('www.'):
-        domain = domain[4:]
+    domain = _domain_from_url(url)
 
-    # Verificar memória de perfil de site    
     try:
         profile = database.get_profile(domain)
     except Exception as e:
         logging.error(f"Failed to fetch profile for {domain}: {e}")
         profile = {}
-        
+
+    requested_level = escalation_level or 1
     saved_level = profile.get('escalation_level', 1)
-    
-    # Se o nível exigido por clique (GUI) for maior do que o salvo, a gente aprende permanentemente a nova tática.
-    if escalation_level > saved_level:
-        logging.info(f"[{domain}] Memorizando nova tática agressiva de extração (Nível {escalation_level}).")
-        mark_escalation_required(domain, escalation_level)
-    # Se o nível que a gente sabe que o site precisa for maior do que o atual, aplicamos automaticamente (Magia da Memória!)
-    elif saved_level > escalation_level:
+    base_level = max(requested_level, saved_level)
+    base_wait_idle = wait_idle or profile.get('wait_idle', False) or base_level >= 2
+
+    if saved_level > requested_level:
         logging.info(f"[{domain}] Memória carregada: Aplicando escalada automática para Nível {saved_level}.")
-        escalation_level = saved_level
-        
+    elif profile.get('wait_idle', False) and not wait_idle:
+        logging.info(f"[{domain}] Memória carregada: Redirecionando para busca JS/SPA pesada (wait_idle=True).")
+
+    levels = _retry_escalation_levels(base_level, max_attempts=3)
+    last_images = []
+
+    for attempt, level in enumerate(levels, 1):
+        attempt_wait_idle = base_wait_idle or level >= 2
+        logging.info(f"[{domain}] Tentativa automática {attempt}/{len(levels)}: nível {level}, wait_idle={attempt_wait_idle}")
+
+        images = _extract_product_images_once(
+            url,
+            session=session,
+            wait_idle=attempt_wait_idle,
+            escalation_level=level,
+        )
+        last_images = images
+        logging.info(f"[{domain}] Tentativa automática {attempt}/{len(levels)} concluída: {len(images)} imagens")
+
+        if images:
+            if attempt > 1 and level > saved_level:
+                logging.info(f"[{domain}] Auto-aprendizado: domínio vencido com nível {level}.")
+                mark_escalation_required(domain, level)
+            return images
+
+    logging.info(f"[{domain}] Falha final: 0 imagens após {len(levels)} tentativas automáticas.")
+    return last_images
+
+def _extract_product_images_once(url, session=None, wait_idle=False, escalation_level=1):
+    """
+    Extracts product images from a fashion e-commerce URL using heuristics.
+    """
+    domain = _domain_from_url(url)
+
     if escalation_level >= 2:
         logging.info(f"[{domain}] Escalation Level {escalation_level}: Forçando hidratação pesada (wait_idle=True)")
         wait_idle = True
         
-    # Manter compatibilidade com a versão antiga do profiles
-    if not wait_idle and profile.get('wait_idle', False):
-         logging.info(f"[{domain}] Memória carregada: Redirecionando para busca JS/SPA pesada (wait_idle=True).")
-         wait_idle = True
 
     images = set()
 
@@ -345,6 +581,15 @@ def extract_product_images(url, session=None, wait_idle=False, escalation_level=
         page_url_lower = page.url.lower()
         if 'login' in page_url_lower or 'signin' in page_url_lower or 'verify' in page_url_lower or 'captcha' in page_url_lower:
             logging.info(f"[{domain}] Anti-Bot/Login Wall Detectado! ({page.url})")
+
+            if _is_shein_domain(domain):
+                logging.info(f"[{domain}] Tentando fallback SHEIN dedicado antes do SSR genérico...")
+                shein_html = str(page.html) if hasattr(page, 'html') else ''
+                shein_images = _extract_via_shein(url, domain, session=session, html=shein_html, page_url=page.url)
+                if shein_images:
+                    images.update(shein_images)
+                    return list(images)
+                logging.info(f"[{domain}] Fallback SHEIN não retornou imagens. Tentando Googlebot SSR genérico...")
             
             # Estratégia 1: Para Shopee, usar a sessão do browser para acessar a API diretamente
             # O browser já tem cookies válidos e tokens anti-crawler do fingerprinting
@@ -361,6 +606,12 @@ def extract_product_images(url, session=None, wait_idle=False, escalation_level=
             fallback_images = _extract_via_googlebot(url, domain)
             images.update(fallback_images)
             return list(images)
+
+        if _is_shein_domain(domain):
+            shein_html = str(page.html) if hasattr(page, 'html') else ''
+            shein_images = _extract_via_shein(url, domain, session=session, html=shein_html, page_url=page.url)
+            if shein_images:
+                images.update(shein_images)
             
     except Exception as e:
         logging.info(f"Error fetching URL: {e}")
@@ -473,9 +724,8 @@ def extract_product_images(url, session=None, wait_idle=False, escalation_level=
             elif not wait_idle:
                 # Smart filter failed! This usually means the real images (which match the OG image)
                 # haven't hydrated yet in SPA frameworks like Deco.cx or VTEX IO. Retry with full hydration!
-                logging.info(f"[{domain}] Aprendendo nova tática! Esse site requer hidratação JS (wait_idle=True).")
-                mark_escalation_required(domain, 2)
-                return extract_product_images(url, session=session, wait_idle=True, escalation_level=escalation_level)
+                logging.info(f"[{domain}] Smart Filter sem imagens similares; retry automatico deve tentar hidratacao JS.")
+                return []
             
     # Heuristic: CDN Dominance Filter
     # Sites like Shopee serve product images from a dedicated CDN (e.g., susercontent.com)

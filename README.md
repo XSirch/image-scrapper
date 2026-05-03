@@ -2,7 +2,7 @@
 
 Um Web Scraper stealth e escalável construído em **Python** e **FastAPI**. Projetado para superar barreiras Anti-Bot agressivas, Captchas e *Login Walls* de gigantes do E-commerce como Temu, Dafiti e Shopee.
 
-![Version](https://img.shields.io/badge/version-0.2.1-blue?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-0.2.4-blue?style=for-the-badge)
 ![Dashboard Preview](https://img.shields.io/badge/Dashboard-Dark_Mode-6c5ce7?style=for-the-badge)
 ![API](https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge)
 ![DB](https://img.shields.io/badge/Database-PostgreSQL-336791?style=for-the-badge)
@@ -11,9 +11,11 @@ Um Web Scraper stealth e escalável construído em **Python** e **FastAPI**. Pro
 
 - **Stealth Embutido**: Utiliza o `Camoufox` + Playwright para se camuflar e anular JS challenges (Cloudflare/Datadome).
 - **Memória Inteligente (PostgreSQL)**: O bot aprende em tempo real qual nível de agressividade cada domínio exige, persistindo essas regras no banco para otimizar buscas futuras.
+- **Auto Retry com Aprendizado**: Quando uma URL retorna 0 imagens, o scraper tenta ate 3 vezes, escala automaticamente a estrategia e grava o menor nivel que venceu o dominio.
 - **API RESTful**: Gateway HTTP para integração com qualquer serviço externo.
 - **Dashboard Web**: Interface visual embarcada para colar URLs e visualizar imagens extraídas com um clique.
 - **Fallback Googlebot SSR**: Quando um site bloqueia o browser (Login Wall), o bot faz uma requisição como Googlebot para extrair imagens do cache de SEO.
+- **Fallback SHEIN**: Detecta paginas de risco (`/risk/...`), ignora assets de layout e tenta extrair imagens por metadados, JSON publico e API `quickView` quando disponivel.
 - **Extração de URL Params**: Detecta imagens codificadas diretamente nos parâmetros da URL (ex: Temu `top_gallery_url`).
 - **Pool de Workers Concorrentes**: Múltiplos browsers stealth em paralelo (configurável via `WORKER_COUNT`), cada um com sua própria sessão isolada. Suporta dezenas de clientes simultâneos.
 - **Monitoramento em Tempo Real**: Endpoint `/api/status` para acompanhar workers ativos, fila de espera e estatísticas de performance.
@@ -88,6 +90,8 @@ Documentação interativa (Swagger) disponível em: `http://localhost:8000/docs`
 
 Extrai imagens de produto de uma URL. **Suporta múltiplos requests simultâneos** — cada um é distribuído automaticamente para um worker disponível no pool.
 
+Se a primeira tentativa retornar 0 imagens, o scraper faz retry automatico ate 3 tentativas totais. A cada retry ele sobe o nivel de agressividade e, quando encontra imagens em uma tentativa posterior, salva esse nivel no perfil do dominio.
+
 **Request:**
 ```json
 {
@@ -102,6 +106,8 @@ Extrai imagens de produto de uma URL. **Suporta múltiplos requests simultâneos
 | 2 | Força `network_idle` para SPAs pesados |
 | 3 | Desativa filtros de similaridade |
 | 4 | Remove todos os filtros de ruído (banners, tabelas, ícones) |
+
+O valor enviado em `escalation_level` e tratado como piso. Se o dominio ja tiver um nivel maior memorizado, o scraper usa o perfil salvo e nunca rebaixa a estrategia automaticamente.
 
 **Response (200):**
 ```json

@@ -6,6 +6,20 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ---
 
+## [0.2.4] - 2026-05-03
+
+### Adicionado
+- **Auto Retry com escalada**: quando uma URL retorna 0 imagens, o scraper tenta ate 3 vezes no total, subindo automaticamente o nivel de agressividade (`1 -> 2 -> 3` ou superior conforme perfil salvo)
+- **Auto-aprendizado por sucesso real**: o dominio so e memorizado com novo nivel quando uma tentativa automatica posterior encontra imagens, evitando gravar estrategias agressivas por falhas temporarias
+- **Fallback dedicado para SHEIN**: deteccao explicita de paginas `/risk/...`, extracao de `goods_id`/`mallCode`, parsing de metadados/JSON/URLs `img.ltwebstatic.com` e tentativa best-effort da API `quickView`
+- **Testes unitarios**: cobertura para fallback SHEIN e orquestracao de retry/aprendizado
+
+### Alterado
+- O Smart Filter agora delega a escalada para o retry automatico em vez de chamar recursivamente a extracao publica
+- O contrato da API foi mantido: apos todas as tentativas sem imagens, o endpoint continua retornando lista vazia
+
+---
+
 ## [0.2.3] - 2026-04-29
 
 ### Adicionado
