@@ -42,6 +42,22 @@ def _scraping_api_fallback_provider():
     return provider
 
 
+def _scraping_api_country_code():
+    return (os.getenv('SCRAPING_API_COUNTRY_CODE', 'br') or '').strip().lower()
+
+
+def _scrapingbee_stealth_domains():
+    raw = os.getenv('SCRAPINGBEE_STEALTH_DOMAINS', 'shein,shopee,temu')
+    return tuple(part.strip().lower() for part in raw.split(',') if part.strip())
+
+
+def _should_use_scrapingbee_stealth(domain):
+    if not _env_bool('SCRAPINGBEE_STEALTH_ENABLED', True):
+        return False
+    domain = (domain or '').lower()
+    return any(marker in domain for marker in _scrapingbee_stealth_domains())
+
+
 def _shein_manual_wait_seconds(domain):
     if not _is_shein_domain(domain):
         return 0
@@ -725,12 +741,15 @@ def _fetch_scrapedo_html(url, domain):
 
     render = _env_bool('SCRAPING_API_RENDER', True)
     super_proxy = _env_bool('SCRAPING_API_SUPER', True)
+    country_code = _scraping_api_country_code()
     params = {
         'token': token,
         'url': url,
         'render': str(render).lower(),
         'super': str(super_proxy).lower(),
     }
+    if country_code:
+        params['geoCode'] = country_code
 
     import time
     started_at = time.time()
@@ -747,7 +766,7 @@ def _fetch_scrapedo_html(url, domain):
         return None, None
 
 
-def _fetch_scrapingbee_html(url, domain):
+def _fetch_scrapingbee_html(url, domain, stealth=False):
     api_key = os.getenv('SCRAPINGBEE_API_KEY', '').strip()
     if not api_key:
         logging.warning(f"[{domain}] API fallback scrapingbee ignorado: SCRAPINGBEE_API_KEY nao configurado.")
@@ -755,25 +774,34 @@ def _fetch_scrapingbee_html(url, domain):
 
     render = _env_bool('SCRAPING_API_RENDER', True)
     premium_proxy = _env_bool('SCRAPING_API_SUPER', True)
+    country_code = _scraping_api_country_code()
     params = {
         'api_key': api_key,
         'url': url,
         'render_js': str(render).lower(),
-        'premium_proxy': str(premium_proxy).lower(),
     }
+    if stealth:
+        params['stealth_proxy'] = 'true'
+        params['render_js'] = 'true'
+    else:
+        params['premium_proxy'] = str(premium_proxy).lower()
+    if country_code:
+        params['country_code'] = country_code
 
     import time
     started_at = time.time()
     try:
         response = requests.get('https://app.scrapingbee.com/api/v1/', params=params, timeout=70)
         elapsed = time.time() - started_at
-        logging.info(f"[{domain}] API fallback scrapingbee: status={response.status_code}, tempo={elapsed:.2f}s")
+        mode = 'stealth' if stealth else 'premium'
+        logging.info(f"[{domain}] API fallback scrapingbee/{mode}: status={response.status_code}, tempo={elapsed:.2f}s")
         if response.status_code >= 500 or response.status_code == 401:
             return None, response.url
         return response.text, response.url
     except Exception as e:
         elapsed = time.time() - started_at
-        logging.warning(f"[{domain}] API fallback scrapingbee falhou em {elapsed:.2f}s: {e}")
+        mode = 'stealth' if stealth else 'premium'
+        logging.warning(f"[{domain}] API fallback scrapingbee/{mode} falhou em {elapsed:.2f}s: {e}")
         return None, None
 
 
@@ -784,6 +812,15 @@ def _extract_via_managed_api(url, domain, reason):
         return []
 
     logging.info(f"[{domain}] API fallback acionado: provider={provider}, motivo={reason}")
+    if _should_use_scrapingbee_stealth(domain):
+        logging.info(f"[{domain}] API fallback: tentando ScrapingBee stealth com proxy BR.")
+        html, response_url = _fetch_scrapingbee_html(url, domain, stealth=True)
+        images = _extract_images_from_api_html(html, url, domain, response_url=response_url or url)
+        logging.info(f"[{domain}] API fallback scrapingbee/stealth: {len(images)} imagens extraidas.")
+        if images or provider == 'scrapingbee':
+            return images
+        logging.info(f"[{domain}] API fallback: stealth sem imagens; tentando provider padrao {provider}.")
+
     if provider == 'scrapingbee':
         html, response_url = _fetch_scrapingbee_html(url, domain)
     else:

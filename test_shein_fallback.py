@@ -254,6 +254,70 @@ class ManagedApiFallbackTests(unittest.TestCase):
 
         self.assertEqual(images, ["https://example.com/image.jpg"])
         get.assert_called_once()
+        self.assertEqual(get.call_args.kwargs["params"]["geoCode"], "br")
+
+    def test_scrapingbee_uses_country_code_and_stealth_for_configured_domains(self):
+        class Response:
+            status_code = 200
+            url = "https://app.scrapingbee.com/api/v1/"
+            text = """
+            <html><head>
+              <meta property="og:image" content="//img.ltwebstatic.com/images3_pi/2025/03/24/e9/main.jpg">
+            </head></html>
+            """
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SCRAPING_API_FALLBACK": "scrapedo",
+                "SCRAPINGBEE_API_KEY": "bee",
+                "SCRAPEDO_TOKEN": "token",
+                "SCRAPING_API_COUNTRY_CODE": "br",
+                "SCRAPINGBEE_STEALTH_ENABLED": "true",
+                "SCRAPINGBEE_STEALTH_DOMAINS": "shein,shopee,temu",
+            },
+            clear=False,
+        ), patch("scrapper.requests.get", return_value=Response()) as get:
+            images = __import__("scrapper")._extract_via_managed_api(
+                "https://br.shein.com/produto-p-123.html",
+                "br.shein.com",
+                reason="manual_test",
+            )
+
+        self.assertEqual(images, ["https://img.ltwebstatic.com/images3_pi/2025/03/24/e9/main.jpg"])
+        params = get.call_args.kwargs["params"]
+        self.assertEqual(params["country_code"], "br")
+        self.assertEqual(params["stealth_proxy"], "true")
+        self.assertNotIn("premium_proxy", params)
+
+    def test_scrapingbee_stealth_applies_to_shopee_and_temu(self):
+        class Response:
+            status_code = 200
+            url = "https://app.scrapingbee.com/api/v1/"
+            text = '<html><head><meta property="og:image" content="/image.jpg"></head></html>'
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SCRAPING_API_FALLBACK": "scrapedo",
+                "SCRAPINGBEE_API_KEY": "bee",
+                "SCRAPEDO_TOKEN": "token",
+                "SCRAPING_API_COUNTRY_CODE": "br",
+                "SCRAPINGBEE_STEALTH_ENABLED": "true",
+                "SCRAPINGBEE_STEALTH_DOMAINS": "shein,shopee,temu",
+            },
+            clear=False,
+        ), patch("scrapper.requests.get", return_value=Response()) as get:
+            for url, domain in (
+                ("https://shopee.com.br/produto", "shopee.com.br"),
+                ("https://temu.com/br/produto", "temu.com"),
+            ):
+                get.reset_mock()
+                images = __import__("scrapper")._extract_via_managed_api(url, domain, reason="manual_test")
+                self.assertEqual(images, [f"https://{domain}/image.jpg"])
+                params = get.call_args.kwargs["params"]
+                self.assertEqual(params["country_code"], "br")
+                self.assertEqual(params["stealth_proxy"], "true")
 
     def test_scrapedo_http_failure_returns_empty(self):
         with patch.dict("os.environ", {"SCRAPING_API_FALLBACK": "scrapedo", "SCRAPEDO_TOKEN": "token"}, clear=False), \

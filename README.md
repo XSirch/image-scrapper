@@ -221,6 +221,9 @@ Retorna o banco de aprendizado de domínios.
 | `SCRAPINGBEE_API_KEY` | Chave ScrapingBee usada somente se `SCRAPING_API_FALLBACK=scrapingbee` | vazio |
 | `SCRAPING_API_RENDER` | Ativa browser/render no provider gerenciado | `true` |
 | `SCRAPING_API_SUPER` | Ativa proxy premium/residencial/mobile no provider gerenciado | `true` |
+| `SCRAPING_API_COUNTRY_CODE` | País do proxy nos providers gerenciados | `br` |
+| `SCRAPINGBEE_STEALTH_ENABLED` | Ativa ScrapingBee `stealth_proxy=true` com proxy BR para domínios difíceis antes do provider padrão | `true` |
+| `SCRAPINGBEE_STEALTH_DOMAINS` | Marcadores de domínio que usam stealth caro (`shein`, `shopee`, `temu`) | `shein,shopee,temu` |
 
 > **💡 Dimensionamento:** Cada worker consome ~300-500MB de RAM. Para uma VPS com 4GB, use `WORKER_COUNT=3`. Para 8GB, pode subir para `WORKER_COUNT=6`.
 
