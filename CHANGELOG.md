@@ -11,6 +11,8 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ### Adicionado
 - **Fallback API gerenciado**: o motor local continua prioritario e chama Scrape.do/ScrapingBee apenas quando retorna 0 imagens ou encontra bloqueio anti-bot terminal
 - **Proxy Brasil para fallback gerenciado**: novos env vars `SCRAPING_API_COUNTRY_CODE`, `SCRAPINGBEE_STEALTH_ENABLED` e `SCRAPINGBEE_STEALTH_DOMAINS` permitem usar proxy BR e ScrapingBee `stealth_proxy=true` automaticamente em paginas SHEIN, Shopee e Temu
+- **Limite de imagens no fallback gerenciado**: `SCRAPING_API_MAX_IMAGES` limita resultados de APIs pagas para evitar retornos excessivos
+- **Extração limitada na ScrapingBee**: `SCRAPINGBEE_LIMITED_EXTRACT_RULES` envia `extract_rules` com XPath limitado ao provider, reduzindo o volume extraído na origem
 - **Callback WebSocket**: novo fluxo `POST /api/extract/async` + `WS /ws/extract/{request_id}` envia eventos `queued`, `started`, `completed`, `failed` e `timeout` sem polling
 - **Dashboard assíncrono**: a interface web agora acompanha extrações via WebSocket e renderiza o resultado ao receber o evento final
 - **Testes unitarios**: cobertura para contrato assíncrono, eventos WebSocket e fallback de API gerenciada

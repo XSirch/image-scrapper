@@ -51,6 +51,69 @@ def _scrapingbee_stealth_domains():
     return tuple(part.strip().lower() for part in raw.split(',') if part.strip())
 
 
+def _managed_api_image_limit():
+    try:
+        return max(1, int(os.getenv('SCRAPING_API_MAX_IMAGES', '10') or 10))
+    except ValueError:
+        return 10
+
+
+def _scrapingbee_limited_extract_rules_enabled():
+    return _env_bool('SCRAPINGBEE_LIMITED_EXTRACT_RULES', True)
+
+
+def _scrapingbee_image_extract_rules():
+    limit = _managed_api_image_limit()
+    image_selector = f"(//img)[position()<={limit}]"
+    source_selector = f"(//source)[position()<={limit}]"
+    return {
+        "og_image": {
+            "selector": "(//meta[@property='og:image' or @name='twitter:image'])[1]",
+            "selector_type": "xpath",
+            "output": "@content",
+            "type": "item",
+        },
+        "img_src": {
+            "selector": image_selector,
+            "selector_type": "xpath",
+            "output": "@src",
+            "type": "list",
+        },
+        "img_data_src": {
+            "selector": image_selector,
+            "selector_type": "xpath",
+            "output": "@data-src",
+            "type": "list",
+        },
+        "img_data_original": {
+            "selector": image_selector,
+            "selector_type": "xpath",
+            "output": "@data-original",
+            "type": "list",
+        },
+        "img_data_zoom": {
+            "selector": image_selector,
+            "selector_type": "xpath",
+            "output": "@data-zoom-image",
+            "type": "list",
+        },
+        "source_srcset": {
+            "selector": source_selector,
+            "selector_type": "xpath",
+            "output": "@srcset",
+            "type": "list",
+        },
+    }
+
+
+def _limit_managed_api_images(images, domain, provider):
+    limit = _managed_api_image_limit()
+    images = list(images or [])
+    if len(images) > limit:
+        logging.info(f"[{domain}] API fallback {provider}: limitando {len(images)} imagens para {limit}.")
+    return images[:limit]
+
+
 def _should_use_scrapingbee_stealth(domain):
     if not _env_bool('SCRAPINGBEE_STEALTH_ENABLED', True):
         return False
@@ -726,11 +789,60 @@ def _extract_images_from_html_requests(html, base_url):
 
 
 def _extract_images_from_api_html(html, base_url, domain, response_url=''):
+    json_images = _extract_images_from_api_json(html, base_url, domain)
+    if json_images:
+        return json_images
     if _is_shein_domain(domain):
         shein_images = _extract_shein_images_from_html(html, page_url=response_url or base_url)
         if shein_images:
             return shein_images
     return _extract_images_from_html_requests(html, base_url)
+
+
+def _extract_images_from_api_json(body, base_url, domain):
+    if not body:
+        return []
+    try:
+        data = json.loads(body)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    images = []
+    seen = set()
+
+    def add(value):
+        if not value or not isinstance(value, str):
+            return
+        # srcset can contain "url 1x, url 2x"; keep the first URL per candidate.
+        value = value.strip()
+        if ',' in value or ' ' in value:
+            value = value.split(',')[0].strip().split(' ')[0].strip()
+        if not value:
+            return
+        if _is_shein_domain(domain):
+            normalized = _normalize_shein_image_url(value)
+        else:
+            normalized = urljoin(base_url, value)
+        if not normalized or normalized in seen:
+            return
+        lower = normalized.lower()
+        if lower.startswith('data:') or '.svg' in lower or '.gif' in lower:
+            return
+        if any(k in lower for k in ['icon', 'logo', 'spinner', 'banner']):
+            return
+        seen.add(normalized)
+        images.append(normalized)
+
+    for value in data.values():
+        if isinstance(value, list):
+            for item in value:
+                add(item)
+        else:
+            add(value)
+
+    return images
 
 
 def _fetch_scrapedo_html(url, domain):
@@ -787,6 +899,8 @@ def _fetch_scrapingbee_html(url, domain, stealth=False):
         params['premium_proxy'] = str(premium_proxy).lower()
     if country_code:
         params['country_code'] = country_code
+    if _scrapingbee_limited_extract_rules_enabled():
+        params['extract_rules'] = json.dumps(_scrapingbee_image_extract_rules())
 
     import time
     started_at = time.time()
@@ -816,6 +930,7 @@ def _extract_via_managed_api(url, domain, reason):
         logging.info(f"[{domain}] API fallback: tentando ScrapingBee stealth com proxy BR.")
         html, response_url = _fetch_scrapingbee_html(url, domain, stealth=True)
         images = _extract_images_from_api_html(html, url, domain, response_url=response_url or url)
+        images = _limit_managed_api_images(images, domain, 'scrapingbee/stealth')
         logging.info(f"[{domain}] API fallback scrapingbee/stealth: {len(images)} imagens extraidas.")
         if images or provider == 'scrapingbee':
             return images
@@ -827,6 +942,7 @@ def _extract_via_managed_api(url, domain, reason):
         html, response_url = _fetch_scrapedo_html(url, domain)
 
     images = _extract_images_from_api_html(html, url, domain, response_url=response_url or url)
+    images = _limit_managed_api_images(images, domain, provider)
     logging.info(f"[{domain}] API fallback {provider}: {len(images)} imagens extraidas.")
     return images
 

@@ -222,6 +222,8 @@ Retorna o banco de aprendizado de domínios.
 | `SCRAPING_API_RENDER` | Ativa browser/render no provider gerenciado | `true` |
 | `SCRAPING_API_SUPER` | Ativa proxy premium/residencial/mobile no provider gerenciado | `true` |
 | `SCRAPING_API_COUNTRY_CODE` | País do proxy nos providers gerenciados | `br` |
+| `SCRAPING_API_MAX_IMAGES` | Limite de imagens retornadas por fallback gerenciado | `10` |
+| `SCRAPINGBEE_LIMITED_EXTRACT_RULES` | Usa `extract_rules` na ScrapingBee para pedir no máximo `SCRAPING_API_MAX_IMAGES` imagens no provider | `true` |
 | `SCRAPINGBEE_STEALTH_ENABLED` | Ativa ScrapingBee `stealth_proxy=true` com proxy BR para domínios difíceis antes do provider padrão | `true` |
 | `SCRAPINGBEE_STEALTH_DOMAINS` | Marcadores de domínio que usam stealth caro (`shein`, `shopee`, `temu`) | `shein,shopee,temu` |
 

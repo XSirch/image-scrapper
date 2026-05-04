@@ -1,6 +1,7 @@
 import unittest
 import sys
 import types
+import json
 from unittest.mock import patch
 
 
@@ -260,11 +261,10 @@ class ManagedApiFallbackTests(unittest.TestCase):
         class Response:
             status_code = 200
             url = "https://app.scrapingbee.com/api/v1/"
-            text = """
-            <html><head>
-              <meta property="og:image" content="//img.ltwebstatic.com/images3_pi/2025/03/24/e9/main.jpg">
-            </head></html>
-            """
+            text = json.dumps({
+                "og_image": "//img.ltwebstatic.com/images3_pi/2025/03/24/e9/main.jpg",
+                "img_src": [],
+            })
 
         with patch.dict(
             "os.environ",
@@ -289,12 +289,14 @@ class ManagedApiFallbackTests(unittest.TestCase):
         self.assertEqual(params["country_code"], "br")
         self.assertEqual(params["stealth_proxy"], "true")
         self.assertNotIn("premium_proxy", params)
+        rules = json.loads(params["extract_rules"])
+        self.assertIn("position()<=10", rules["img_src"]["selector"])
 
     def test_scrapingbee_stealth_applies_to_shopee_and_temu(self):
         class Response:
             status_code = 200
             url = "https://app.scrapingbee.com/api/v1/"
-            text = '<html><head><meta property="og:image" content="/image.jpg"></head></html>'
+            text = json.dumps({"og_image": "/image.jpg", "img_src": []})
 
         with patch.dict(
             "os.environ",
@@ -318,6 +320,32 @@ class ManagedApiFallbackTests(unittest.TestCase):
                 params = get.call_args.kwargs["params"]
                 self.assertEqual(params["country_code"], "br")
                 self.assertEqual(params["stealth_proxy"], "true")
+                self.assertIn("extract_rules", params)
+
+    def test_managed_api_limits_returned_images_to_configured_max(self):
+        class Response:
+            status_code = 200
+            url = "https://app.scrapingbee.com/api/v1/"
+            text = json.dumps({"img_src": [f"/image-{i}.jpg" for i in range(15)]})
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SCRAPING_API_FALLBACK": "scrapingbee",
+                "SCRAPINGBEE_API_KEY": "bee",
+                "SCRAPING_API_MAX_IMAGES": "10",
+                "SCRAPINGBEE_STEALTH_ENABLED": "false",
+            },
+            clear=False,
+        ), patch("scrapper.requests.get", return_value=Response()):
+            images = __import__("scrapper")._extract_via_managed_api(
+                "https://example.com/produto",
+                "example.com",
+                reason="manual_test",
+            )
+
+        self.assertEqual(len(images), 10)
+        self.assertTrue(all(image.startswith("https://example.com/image-") for image in images))
 
     def test_scrapedo_http_failure_returns_empty(self):
         with patch.dict("os.environ", {"SCRAPING_API_FALLBACK": "scrapedo", "SCRAPEDO_TOKEN": "token"}, clear=False), \
