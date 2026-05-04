@@ -5,5 +5,7 @@ customtkinter
 lxml
 fastapi
 uvicorn
+websockets
 pydantic
 psycopg2-binary
+solvecaptcha-python

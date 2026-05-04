@@ -280,6 +280,8 @@
 
     <script>
         const API = location.origin;
+        const WS = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+        let currentSocket = null;
 
         function setStatus(state, msg) {
             const el = document.getElementById('status');
@@ -293,14 +295,18 @@
             const level = +document.getElementById('levelSelect').value;
             const btn = document.getElementById('btnGo');
             btn.disabled = true;
+            if (currentSocket) {
+                currentSocket.close();
+                currentSocket = null;
+            }
 
-            setStatus('loading', 'processando...');
+            setStatus('loading', 'enfileirando...');
             document.getElementById('emptyMsg').style.display = 'none';
             document.getElementById('resultsSection').style.display = 'none';
 
             try {
                 const t0 = performance.now();
-                const res = await fetch(`${API}/api/extract`, {
+                const res = await fetch(`${API}/api/extract/async`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url, escalation_level: level })
@@ -309,17 +315,8 @@
                     const e = await res.json();
                     throw new Error(e.detail || res.statusText);
                 }
-                const imgs = await res.json();
-                const sec = ((performance.now() - t0) / 1000).toFixed(1);
-
-                if (!imgs.length) {
-                    setStatus('error', `0 imagens · ${sec}s`);
-                    document.getElementById('emptyMsg').textContent = 'nenhuma imagem encontrada para essa url';
-                    document.getElementById('emptyMsg').style.display = '';
-                } else {
-                    setStatus('done', `${imgs.length} imagen${imgs.length > 1 ? 's' : ''} · ${sec}s`);
-                    render(imgs);
-                }
+                const task = await res.json();
+                await waitForExtraction(task.request_id, t0);
                 loadProfiles();
             } catch (e) {
                 setStatus('error', e.message);
@@ -328,6 +325,63 @@
             } finally {
                 btn.disabled = false;
             }
+        }
+
+        function waitForExtraction(requestId, t0) {
+            return new Promise((resolve, reject) => {
+                let settled = false;
+                const socket = new WebSocket(`${WS}/ws/extract/${requestId}`);
+                currentSocket = socket;
+
+                socket.onmessage = event => {
+                    const data = JSON.parse(event.data);
+                    if (data.status === 'accepted' || data.status === 'queued') {
+                        setStatus('loading', `na fila · ${requestId}`);
+                        return;
+                    }
+                    if (data.status === 'started') {
+                        setStatus('loading', `processando · ${requestId}`);
+                        return;
+                    }
+                    if (data.status === 'completed') {
+                        settled = true;
+                        const imgs = data.images || [];
+                        const sec = (data.elapsed_seconds || ((performance.now() - t0) / 1000)).toFixed(1);
+                        socket.close();
+
+                        if (!imgs.length) {
+                            setStatus('error', `0 imagens · ${sec}s`);
+                            document.getElementById('emptyMsg').textContent = 'nenhuma imagem encontrada para essa url';
+                            document.getElementById('emptyMsg').style.display = '';
+                        } else {
+                            setStatus('done', `${imgs.length} imagen${imgs.length > 1 ? 's' : ''} · ${sec}s`);
+                            render(imgs);
+                        }
+                        resolve();
+                        return;
+                    }
+                    if (data.status === 'failed' || data.status === 'timeout' || data.status === 'not_found') {
+                        settled = true;
+                        socket.close();
+                        reject(new Error(data.error || 'falha na extração'));
+                    }
+                };
+
+                socket.onerror = () => {
+                    if (!settled) {
+                        settled = true;
+                        reject(new Error('erro na conexão websocket'));
+                    }
+                };
+
+                socket.onclose = () => {
+                    if (currentSocket === socket) currentSocket = null;
+                    if (!settled) {
+                        settled = true;
+                        reject(new Error('websocket fechado antes do resultado'));
+                    }
+                };
+            });
         }
 
         function render(imgs) {

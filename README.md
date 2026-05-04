@@ -2,7 +2,7 @@
 
 Um Web Scraper stealth e escalável construído em **Python** e **FastAPI**. Projetado para superar barreiras Anti-Bot agressivas, Captchas e *Login Walls* de gigantes do E-commerce como Temu, Dafiti e Shopee.
 
-![Version](https://img.shields.io/badge/version-0.2.4-blue?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-0.2.5-blue?style=for-the-badge)
 ![Dashboard Preview](https://img.shields.io/badge/Dashboard-Dark_Mode-6c5ce7?style=for-the-badge)
 ![API](https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge)
 ![DB](https://img.shields.io/badge/Database-PostgreSQL-336791?style=for-the-badge)
@@ -15,9 +15,12 @@ Um Web Scraper stealth e escalável construído em **Python** e **FastAPI**. Pro
 - **API RESTful**: Gateway HTTP para integração com qualquer serviço externo.
 - **Dashboard Web**: Interface visual embarcada para colar URLs e visualizar imagens extraídas com um clique.
 - **Fallback Googlebot SSR**: Quando um site bloqueia o browser (Login Wall), o bot faz uma requisição como Googlebot para extrair imagens do cache de SEO.
+- **Fallback API Gerenciado**: Se o motor local retornar 0 imagens ou encontrar bloqueio anti-bot terminal, chama Scrape.do (default) ou ScrapingBee apenas como fallback.
 - **Fallback SHEIN**: Detecta paginas de risco (`/risk/...`), ignora assets de layout e tenta extrair imagens por metadados, JSON publico e API `quickView` quando disponivel.
+- **Sessao Manual Persistente**: Pode rodar o browser visivel com perfil em disco para resolver challenges manualmente e reutilizar cookies em novas extrações.
 - **Extração de URL Params**: Detecta imagens codificadas diretamente nos parâmetros da URL (ex: Temu `top_gallery_url`).
 - **Pool de Workers Concorrentes**: Múltiplos browsers stealth em paralelo (configurável via `WORKER_COUNT`), cada um com sua própria sessão isolada. Suporta dezenas de clientes simultâneos.
+- **Callback WebSocket**: Fluxo assíncrono com `request_id` e eventos em tempo real, sem polling do requisitante.
 - **Monitoramento em Tempo Real**: Endpoint `/api/status` para acompanhar workers ativos, fila de espera e estatísticas de performance.
 
 ---
@@ -117,6 +120,39 @@ O valor enviado em `escalation_level` e tratado como piso. Se o dominio ja tiver
 ]
 ```
 
+### `POST /api/extract/async`
+
+Cria uma tarefa de extração e retorna imediatamente um `request_id`. Use o WebSocket `/ws/extract/{request_id}` para receber os eventos sem polling.
+
+**Response (200):**
+```json
+{
+  "request_id": "a1b2c3d4",
+  "status": "queued"
+}
+```
+
+### `WS /ws/extract/{request_id}`
+
+Envia o estado atual ao conectar e depois publica eventos da tarefa:
+
+```json
+{
+  "event": "completed",
+  "request_id": "a1b2c3d4",
+  "status": "completed",
+  "url": "https://www.dafiti.com.br/algum-produto",
+  "image_count": 2,
+  "images": [
+    "https://static.dafiti.com.br/p/foto-1.jpg",
+    "https://static.dafiti.com.br/p/foto-2.jpg"
+  ],
+  "elapsed_seconds": 8.4
+}
+```
+
+Eventos possíveis: `accepted`, `queued`, `started`, `completed`, `failed`, `timeout`, `not_found`.
+
 ### `GET /api/status`
 
 Retorna o estado atual do sistema: pool de workers, fila e estatísticas.
@@ -177,5 +213,27 @@ Retorna o banco de aprendizado de domínios.
 | `DATABASE_URL` | URL de conexão PostgreSQL | `postgresql://user:pass@host:5432/db` |
 | `WORKER_COUNT` | Número de browsers stealth simultâneos | `3` |
 | `REQUEST_TIMEOUT` | Timeout máximo por request (segundos) | `120` |
+| `BROWSER_HEADLESS` | Define se os workers rodam sem janela. Use `false` para resolver challenges manualmente | `true` |
+| `BROWSER_USER_DATA_DIR` | Diretório base para perfis persistentes por worker (`worker-0`, `worker-1`, etc.) | vazio |
+| `SHEIN_MANUAL_WAIT_SECONDS` | Tempo que o scraper espera na página SHEIN antes de analisar, permitindo resolver o challenge no browser visível | `0` |
+| `SCRAPING_API_FALLBACK` | Provider de fallback quando o motor local falha (`scrapedo`, `scrapingbee`, `none`) | `scrapedo` |
+| `SCRAPEDO_TOKEN` | Token da API Scrape.do usado somente no fallback | vazio |
+| `SCRAPINGBEE_API_KEY` | Chave ScrapingBee usada somente se `SCRAPING_API_FALLBACK=scrapingbee` | vazio |
+| `SCRAPING_API_RENDER` | Ativa browser/render no provider gerenciado | `true` |
+| `SCRAPING_API_SUPER` | Ativa proxy premium/residencial/mobile no provider gerenciado | `true` |
 
 > **💡 Dimensionamento:** Cada worker consome ~300-500MB de RAM. Para uma VPS com 4GB, use `WORKER_COUNT=3`. Para 8GB, pode subir para `WORKER_COUNT=6`.
+
+### Sessão manual para SHEIN
+
+Quando a SHEIN retorna apenas `/risk/challenge` ou `/risk/action/limit`, retries automáticos não resolvem. Para reaproveitar uma sessão validada:
+
+```bash
+$env:WORKER_COUNT="1"
+$env:BROWSER_HEADLESS="false"
+$env:BROWSER_USER_DATA_DIR=".browser-profiles"
+$env:SHEIN_MANUAL_WAIT_SECONDS="90"
+uvicorn main:app --port 8000
+```
+
+Na primeira requisição da SHEIN, resolva o challenge na janela aberta durante o tempo configurado. O perfil fica salvo em `.browser-profiles/worker-0` e será reutilizado nas próximas execuções enquanto o diretório for preservado.

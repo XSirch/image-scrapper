@@ -13,6 +13,43 @@ MEMORY_FILE = 'site_profiles.json'
 # Domínios de encurtadores conhecidos que devem ser resolvidos antes do scraping
 SHORT_URL_DOMAINS = ['shp.ee', 'sho.pe', 's.shopee']
 
+# SolveCaptcha API key — configure via env var SOLVECAPTCHA_API_KEY
+SOLVECAPTCHA_API_KEY = os.getenv('SOLVECAPTCHA_API_KEY', '')
+
+# Managed scraping API fallback. The local engine remains the primary path.
+SCRAPING_API_FALLBACK_DEFAULT = 'scrapedo'
+
+
+class _TerminalAntiBotBlock(Exception):
+    """Signals a hard anti-bot wall where local retries are unlikely to help."""
+
+
+def _env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _scraping_api_fallback_provider():
+    provider = os.getenv('SCRAPING_API_FALLBACK', SCRAPING_API_FALLBACK_DEFAULT)
+    provider = (provider or '').strip().lower()
+    if provider in ('none', 'off', 'false', '0', ''):
+        return 'none'
+    if provider not in ('scrapedo', 'scrapingbee'):
+        logging.warning("[API Fallback] Provedor invalido '%s'. Usando scrapedo.", provider)
+        return 'scrapedo'
+    return provider
+
+
+def _shein_manual_wait_seconds(domain):
+    if not _is_shein_domain(domain):
+        return 0
+    try:
+        return max(0, int(os.getenv('SHEIN_MANUAL_WAIT_SECONDS', '0') or 0))
+    except ValueError:
+        return 0
+
 import database
 
 SHEIN_PRODUCT_IMAGE_PATHS = (
@@ -501,6 +538,288 @@ def _extract_via_browser_api(url, domain, session):
     
     return []
 
+
+# ---------------------------------------------------------------------------
+# CAPTCHA Solving — SolveCaptcha integration
+# ---------------------------------------------------------------------------
+
+def _get_captcha_solver():
+    """Retorna instância do SolveCaptcha se a API key estiver configurada."""
+    if not SOLVECAPTCHA_API_KEY:
+        return None
+    try:
+        from solvecaptcha import Solvecaptcha
+        return Solvecaptcha(SOLVECAPTCHA_API_KEY)
+    except ImportError:
+        logging.warning("[CAPTCHA] solvecaptcha-python não instalado. Execute: pip install solvecaptcha-python")
+        return None
+
+
+def _detect_captcha_info(html):
+    """
+    Analisa o HTML para detectar o tipo de CAPTCHA e extrair o sitekey.
+    Retorna (captcha_type, sitekey, extra_params) ou (None, None, {}).
+    Detecta: Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest v3/v4.
+    """
+    if not html:
+        return None, None, {}
+
+    # Cloudflare Turnstile (Temu e sites protegidos por CF)
+    m = re.search(r'cf-turnstile[\s\S]{0,400}data-sitekey=["\']([^"\']{10,})["\']', html, re.IGNORECASE)
+    if not m:
+        m = re.search(r'data-sitekey=["\']([^"\']{10,})["\'][\s\S]{0,200}cf-turnstile', html, re.IGNORECASE)
+    if m:
+        return 'turnstile', m.group(1), {}
+
+    # reCAPTCHA v2
+    m = re.search(r'class=["\'][^"\']*(g-recaptcha)[^"\'][^>]*data-sitekey=["\']([^"\']+)["\']'
+                  r'|data-sitekey=["\']([^"\']+)["\'][^>]*class=["\'][^"\']*(g-recaptcha)',
+                  html, re.IGNORECASE)
+    if m:
+        sitekey = next((g for g in m.groups() if g and len(g) > 20), None)
+        if sitekey:
+            return 'recaptcha_v2', sitekey, {}
+
+    # reCAPTCHA v3
+    m = re.search(r'grecaptcha\.execute\(["\']([^"\']{20,})["\']', html)
+    if m:
+        action_m = re.search(r'["\']action["\']\s*:\s*["\']([^"\']+)["\']', html)
+        return 'recaptcha_v3', m.group(1), {'action': action_m.group(1) if action_m else 'submit'}
+
+    # GeeTest v4 (Shein usa variante baseada em GeeTest)
+    m = re.search(r'initGeetest4[\s\S]{0,200}captchaId[\s":]+([a-f0-9]{32})', html, re.IGNORECASE)
+    if m:
+        return 'geetest_v4', m.group(1), {}
+
+    # GeeTest v3
+    m = re.search(r'initGeetest[\s\S]{0,200}["\']gt["\'][\s:]+["\']([a-f0-9]{32})["\']', html, re.IGNORECASE)
+    if m:
+        return 'geetest_v3', m.group(1), {}
+
+    return None, None, {}
+
+
+def _call_solvecaptcha(captcha_type, sitekey, page_url, domain, extra):
+    """Chama o serviço SolveCaptcha e retorna o token resolvido ou None."""
+    solver = _get_captcha_solver()
+    if not solver:
+        return None
+
+    logging.info(f"[{domain}] CAPTCHA: Enviando para SolveCaptcha ({captcha_type}, sitekey={sitekey[:20]}...)")
+    try:
+        if captcha_type == 'turnstile':
+            result = solver.turnstile(sitekey=sitekey, url=page_url)
+        elif captcha_type == 'recaptcha_v2':
+            result = solver.recaptcha(sitekey=sitekey, url=page_url)
+        elif captcha_type == 'recaptcha_v3':
+            result = solver.recaptcha(
+                sitekey=sitekey, url=page_url,
+                version='v3', action=extra.get('action', 'submit'), score=0.7
+            )
+        elif captcha_type == 'geetest_v4':
+            result = solver.geetest_v4(captcha_id=sitekey, url=page_url)
+        elif captcha_type == 'geetest_v3':
+            result = solver.geetest(gt=sitekey, url=page_url)
+        else:
+            logging.info(f"[{domain}] CAPTCHA: Tipo '{captcha_type}' não suportado.")
+            return None
+
+        token = result.get('code') if isinstance(result, dict) else getattr(result, 'code', str(result))
+        if token:
+            logging.info(f"[{domain}] CAPTCHA: Token obtido! ({str(token)[:30]}...)")
+        return token
+    except Exception as e:
+        logging.warning(f"[{domain}] CAPTCHA: SolveCaptcha falhou ({captcha_type}): {e}")
+        return None
+
+
+def _submit_turnstile_and_extract(url, domain, token):
+    """Submete o token CF Turnstile para obter cf_clearance e extrai imagens."""
+    try:
+        import time
+        parsed = urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        req = requests.Session()
+        req.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        })
+        req.get(url, timeout=15)  # coleta cookies base
+        req.post(
+            f"{base}/cdn-cgi/challenge-platform/h/b/flow/ov1/response",
+            data={'cf-turnstile-response': token, 'md': '', 'r': ''},
+            headers={"Referer": url, "Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
+        if 'cf_clearance' not in req.cookies:
+            req.post(url, data={'cf-turnstile-response': token}, timeout=15)
+        time.sleep(1)
+        r = req.get(url, timeout=20)
+        if r.status_code == 200 and 'cf-browser-verification' not in r.text:
+            logging.info(f"[{domain}] Turnstile: Clearance OK!")
+            if _is_shein_domain(domain):
+                return _extract_shein_images_from_html(r.text, page_url=r.url)
+            return _extract_images_from_html_requests(r.text, url)
+        logging.info(f"[{domain}] Turnstile: Clearance não obtido (status={r.status_code}).")
+    except Exception as e:
+        logging.warning(f"[{domain}] Turnstile submit erro: {e}")
+    return []
+
+
+def _submit_recaptcha_and_extract(url, domain, token):
+    """Injeta token reCAPTCHA via POST e extrai imagens da resposta."""
+    try:
+        r = requests.post(
+            url,
+            data={'g-recaptcha-response': token},
+            headers={"User-Agent": "Mozilla/5.0", "Referer": url},
+            timeout=20,
+        )
+        if r.status_code == 200:
+            logging.info(f"[{domain}] reCAPTCHA: POST OK.")
+            if _is_shein_domain(domain):
+                return _extract_shein_images_from_html(r.text, page_url=r.url)
+            return _extract_images_from_html_requests(r.text, url)
+    except Exception as e:
+        logging.warning(f"[{domain}] reCAPTCHA submit erro: {e}")
+    return []
+
+
+def _extract_images_from_html_requests(html, base_url):
+    """Extração leve de imagens a partir de HTML bruto (sem browser)."""
+    if not html:
+        return []
+    images = set()
+    for m in re.findall(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.IGNORECASE):
+        images.add(urljoin(base_url, m))
+    for m in re.findall(r'content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', html, re.IGNORECASE):
+        images.add(urljoin(base_url, m))
+    for script in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.IGNORECASE | re.DOTALL):
+        try:
+            _collect_shein_images_from_data(json.loads(script), images, trusted=True)
+        except Exception:
+            pass
+    for src in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
+        if src.startswith('data:') or '.svg' in src or '.gif' in src:
+            continue
+        full = urljoin(base_url, src)
+        if not any(k in full.lower() for k in ['icon', 'logo', 'spinner', 'banner']):
+            images.add(full)
+    return list(images)
+
+
+def _extract_images_from_api_html(html, base_url, domain, response_url=''):
+    if _is_shein_domain(domain):
+        shein_images = _extract_shein_images_from_html(html, page_url=response_url or base_url)
+        if shein_images:
+            return shein_images
+    return _extract_images_from_html_requests(html, base_url)
+
+
+def _fetch_scrapedo_html(url, domain):
+    token = os.getenv('SCRAPEDO_TOKEN', '').strip()
+    if not token:
+        logging.warning(f"[{domain}] API fallback scrapedo ignorado: SCRAPEDO_TOKEN nao configurado.")
+        return None, None
+
+    render = _env_bool('SCRAPING_API_RENDER', True)
+    super_proxy = _env_bool('SCRAPING_API_SUPER', True)
+    params = {
+        'token': token,
+        'url': url,
+        'render': str(render).lower(),
+        'super': str(super_proxy).lower(),
+    }
+
+    import time
+    started_at = time.time()
+    try:
+        response = requests.get('https://api.scrape.do/', params=params, timeout=70)
+        elapsed = time.time() - started_at
+        logging.info(f"[{domain}] API fallback scrapedo: status={response.status_code}, tempo={elapsed:.2f}s")
+        if response.status_code >= 500:
+            return None, response.url
+        return response.text, response.url
+    except Exception as e:
+        elapsed = time.time() - started_at
+        logging.warning(f"[{domain}] API fallback scrapedo falhou em {elapsed:.2f}s: {e}")
+        return None, None
+
+
+def _fetch_scrapingbee_html(url, domain):
+    api_key = os.getenv('SCRAPINGBEE_API_KEY', '').strip()
+    if not api_key:
+        logging.warning(f"[{domain}] API fallback scrapingbee ignorado: SCRAPINGBEE_API_KEY nao configurado.")
+        return None, None
+
+    render = _env_bool('SCRAPING_API_RENDER', True)
+    premium_proxy = _env_bool('SCRAPING_API_SUPER', True)
+    params = {
+        'api_key': api_key,
+        'url': url,
+        'render_js': str(render).lower(),
+        'premium_proxy': str(premium_proxy).lower(),
+    }
+
+    import time
+    started_at = time.time()
+    try:
+        response = requests.get('https://app.scrapingbee.com/api/v1/', params=params, timeout=70)
+        elapsed = time.time() - started_at
+        logging.info(f"[{domain}] API fallback scrapingbee: status={response.status_code}, tempo={elapsed:.2f}s")
+        if response.status_code >= 500 or response.status_code == 401:
+            return None, response.url
+        return response.text, response.url
+    except Exception as e:
+        elapsed = time.time() - started_at
+        logging.warning(f"[{domain}] API fallback scrapingbee falhou em {elapsed:.2f}s: {e}")
+        return None, None
+
+
+def _extract_via_managed_api(url, domain, reason):
+    provider = _scraping_api_fallback_provider()
+    if provider == 'none':
+        logging.info(f"[{domain}] API fallback desativado. Motivo local: {reason}")
+        return []
+
+    logging.info(f"[{domain}] API fallback acionado: provider={provider}, motivo={reason}")
+    if provider == 'scrapingbee':
+        html, response_url = _fetch_scrapingbee_html(url, domain)
+    else:
+        html, response_url = _fetch_scrapedo_html(url, domain)
+
+    images = _extract_images_from_api_html(html, url, domain, response_url=response_url or url)
+    logging.info(f"[{domain}] API fallback {provider}: {len(images)} imagens extraidas.")
+    return images
+
+
+def _attempt_captcha_bypass(url, domain, html, page_url):
+    """
+    Ponto de entrada do CAPTCHA solving.
+    Detecta o tipo no HTML, resolve via SolveCaptcha e retorna imagens extraídas.
+    Retorna [] se SOLVECAPTCHA_API_KEY não configurado ou solving falhar.
+    """
+    if not SOLVECAPTCHA_API_KEY:
+        return []
+    captcha_type, sitekey, extra = _detect_captcha_info(html)
+    if not captcha_type:
+        logging.info(f"[{domain}] CAPTCHA: Nenhum tipo detectado no HTML.")
+        return []
+    token = _call_solvecaptcha(captcha_type, sitekey, page_url, domain, extra)
+    if not token:
+        return []
+    if captcha_type == 'turnstile':
+        return _submit_turnstile_and_extract(url, domain, token)
+    elif captcha_type in ('recaptcha_v2', 'recaptcha_v3'):
+        return _submit_recaptcha_and_extract(url, domain, token)
+    elif captcha_type in ('geetest_v3', 'geetest_v4'):
+        # GeeTest: token é dict; melhor estratégia disponível é tentar SSR
+        logging.info(f"[{domain}] GeeTest resolvido. Tentando SSR após solving...")
+        return _extract_via_googlebot(url, domain)
+    return []
+
+
 # Fashion product pages generally have large images in galleries.
 # We will use Scrapling's StealthyFetcher to bypass possible basic bot protections.
 def extract_product_images(url, session=None, wait_idle=False, escalation_level=1):
@@ -530,12 +849,17 @@ def extract_product_images(url, session=None, wait_idle=False, escalation_level=
         attempt_wait_idle = base_wait_idle or level >= 2
         logging.info(f"[{domain}] Tentativa automática {attempt}/{len(levels)}: nível {level}, wait_idle={attempt_wait_idle}")
 
-        images = _extract_product_images_once(
-            url,
-            session=session,
-            wait_idle=attempt_wait_idle,
-            escalation_level=level,
-        )
+        try:
+            images = _extract_product_images_once(
+                url,
+                session=session,
+                wait_idle=attempt_wait_idle,
+                escalation_level=level,
+            )
+        except _TerminalAntiBotBlock as e:
+            logging.info(f"[{domain}] Bloqueio terminal no motor local: {e}")
+            return _extract_via_managed_api(url, domain, reason=str(e))
+
         last_images = images
         logging.info(f"[{domain}] Tentativa automática {attempt}/{len(levels)} concluída: {len(images)} imagens")
 
@@ -546,7 +870,8 @@ def extract_product_images(url, session=None, wait_idle=False, escalation_level=
             return images
 
     logging.info(f"[{domain}] Falha final: 0 imagens após {len(levels)} tentativas automáticas.")
-    return last_images
+    api_images = _extract_via_managed_api(url, domain, reason='local_returned_zero_images')
+    return api_images or last_images
 
 def _extract_product_images_once(url, session=None, wait_idle=False, escalation_level=1):
     """
@@ -581,16 +906,28 @@ def _extract_product_images_once(url, session=None, wait_idle=False, escalation_
         page_url_lower = page.url.lower()
         if 'login' in page_url_lower or 'signin' in page_url_lower or 'verify' in page_url_lower or 'captcha' in page_url_lower:
             logging.info(f"[{domain}] Anti-Bot/Login Wall Detectado! ({page.url})")
+            page_html = str(page.html) if hasattr(page, 'html') else ''
+
+            # === Etapa 0: CAPTCHA solving automático (SolveCaptcha) ===
+            captcha_images = _attempt_captcha_bypass(url, domain, page_html, page.url)
+            if captcha_images:
+                logging.info(f"[{domain}] CAPTCHA bypass bem-sucedido: {len(captcha_images)} imagens!")
+                images.update(captcha_images)
+                return list(images)
 
             if _is_shein_domain(domain):
                 logging.info(f"[{domain}] Tentando fallback SHEIN dedicado antes do SSR genérico...")
-                shein_html = str(page.html) if hasattr(page, 'html') else ''
-                shein_images = _extract_via_shein(url, domain, session=session, html=shein_html, page_url=page.url)
+                shein_images = _extract_via_shein(url, domain, session=session, html=page_html, page_url=page.url)
                 if shein_images:
                     images.update(shein_images)
                     return list(images)
                 logging.info(f"[{domain}] Fallback SHEIN não retornou imagens. Tentando Googlebot SSR genérico...")
-            
+                fallback_images = _extract_via_googlebot(url, domain)
+                if fallback_images:
+                    images.update(fallback_images)
+                    return list(images)
+                raise _TerminalAntiBotBlock("SHEIN retornou apenas paginas de risco/API bloqueada")
+
             # Estratégia 1: Para Shopee, usar a sessão do browser para acessar a API diretamente
             # O browser já tem cookies válidos e tokens anti-crawler do fingerprinting
             if 'shopee' in domain and session:
@@ -600,19 +937,35 @@ def _extract_product_images_once(url, session=None, wait_idle=False, escalation_
                     images.update(browser_images)
                     return list(images)
                 logging.info(f"[{domain}] Browser API não retornou imagens. Tentando Googlebot SSR...")
-            
-            # Estratégia 2: Fallback via Googlebot SSR (funciona para sites que servem SSR ao Google)
+
+            # Estratégia 2: Fallback via Googlebot SSR
             logging.info(f"[{domain}] Ativando fallback Googlebot SSR para extrair imagens do cache de SEO...")
             fallback_images = _extract_via_googlebot(url, domain)
-            images.update(fallback_images)
-            return list(images)
+            if fallback_images:
+                images.update(fallback_images)
+                return list(images)
+            if images:
+                return list(images)
+            raise _TerminalAntiBotBlock(f"anti-bot/login wall detectado em {page.url}")
 
         if _is_shein_domain(domain):
             shein_html = str(page.html) if hasattr(page, 'html') else ''
+            # Verifica se a página Shein é de risco (ex: /risk/challenge inline)
+            shein_risk_page = _is_shein_risk_page(page.url, shein_html)
+            if shein_risk_page:
+                logging.info(f"[{domain}] Shein risk page detectada. Tentando CAPTCHA bypass...")
+                captcha_images = _attempt_captcha_bypass(url, domain, shein_html, page.url)
+                if captcha_images:
+                    images.update(captcha_images)
+                    return list(images)
             shein_images = _extract_via_shein(url, domain, session=session, html=shein_html, page_url=page.url)
             if shein_images:
                 images.update(shein_images)
+            elif shein_risk_page and not images:
+                raise _TerminalAntiBotBlock("SHEIN risk page sem imagens extraiveis")
             
+    except _TerminalAntiBotBlock:
+        raise
     except Exception as e:
         logging.info(f"Error fetching URL: {e}")
         return list(images)
